@@ -13,7 +13,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="supplier")
     company_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
@@ -23,7 +23,7 @@ class PasswordResetToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    user: Mapped[User] = relationship()
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 class Quote(Base):
     __tablename__ = "quotes"

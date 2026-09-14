@@ -1,9 +1,9 @@
 import csv
 import io
 import os
-import secrets
-import hashlib
 import unicodedata
+import hashlib
+import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -15,12 +15,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, inspect, text, delete
 from sqlalchemy.orm import Session, selectinload
 from openpyxl import load_workbook, Workbook
 
 from .db import Base, engine, get_db, SessionLocal
-from .models import User, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PasswordResetToken
+from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse
 from .security import hash_password, verify_password
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,17 +32,6 @@ APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Sao_Paulo")
 
 def now_local() -> datetime:
     return datetime.now(ZoneInfo(APP_TIMEZONE)).replace(tzinfo=None)
-
-
-def token_digest(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def public_base_url(request: Request) -> str:
-    configured = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
-    if configured:
-        return configured
-    return str(request.base_url).rstrip("/")
 
 
 def parse_decimal(value, default="0") -> Decimal:
@@ -70,20 +59,33 @@ def require_role(request: Request, db: Session, role: str) -> User:
     return user
 
 
+def ensure_runtime_schema():
+    """Aplica pequenas migrações compatíveis com bancos já existentes."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    if "must_change_password" not in columns:
+        with engine.begin() as conn:
+            default_value = "FALSE" if engine.dialect.name == "postgresql" else "0"
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT {default_value}"))
+
+
 def seed_admin():
-    Base.metadata.create_all(bind=engine)
     email = os.getenv("ADMIN_EMAIL", "admin@empresa.local").lower()
     password = os.getenv("ADMIN_PASSWORD", "Admin123!")
     name = os.getenv("ADMIN_NAME", "Administrador")
     with SessionLocal() as db:
         existing = db.scalar(select(User).where(User.email == email))
         if not existing:
-            db.add(User(name=name, email=email, password_hash=hash_password(password), role="admin", company_name="Administração"))
+            db.add(User(name=name, email=email, password_hash=hash_password(password), role="admin", company_name="Administração", must_change_password=False))
             db.commit()
 
 
 @app.on_event("startup")
 def startup():
+    Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema()
     seed_admin()
 
 
@@ -97,6 +99,8 @@ def home(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
     if not user:
         return RedirectResponse("/login", 303)
+    if user.role == "supplier" and user.must_change_password:
+        return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
 
 
@@ -113,6 +117,8 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["role"] = user.role
+    if user.role == "supplier" and user.must_change_password:
+        return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
 
 
@@ -133,17 +139,23 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
 def admin_suppliers(request: Request, db: Session = Depends(get_db)):
     user = require_role(request, db, "admin")
     suppliers = db.scalars(select(User).where(User.role == "supplier").order_by(User.company_name, User.name)).all()
-    reset_link = request.session.pop("reset_link", None)
-    reset_supplier = request.session.pop("reset_supplier", None)
-    created = request.query_params.get("created") == "1"
-    return templates.TemplateResponse(request, "admin_suppliers.html", {
-        "user": user,
-        "suppliers": suppliers,
-        "error": None,
-        "success": "Fornecedor cadastrado com sucesso. Os campos foram limpos." if created else None,
-        "reset_link": reset_link,
-        "reset_supplier": reset_supplier,
-    })
+    created = request.query_params.get("criado") == "1"
+    updated = request.query_params.get("editado") == "1"
+    deleted = request.query_params.get("excluido") == "1"
+    return templates.TemplateResponse(
+        request,
+        "admin_suppliers.html",
+        {
+            "user": user,
+            "suppliers": suppliers,
+            "error": None,
+            "reset_link": None,
+            "reset_supplier": None,
+            "created": created,
+            "updated": updated,
+            "deleted": deleted,
+        },
+    )
 
 
 @app.post("/admin/fornecedores")
@@ -159,88 +171,194 @@ def create_supplier(
     normalized = email.strip().lower()
     if db.scalar(select(User).where(User.email == normalized)):
         suppliers = db.scalars(select(User).where(User.role == "supplier")).all()
-        return templates.TemplateResponse(request, "admin_suppliers.html", {
-            "user": current_user(request, db),
-            "suppliers": suppliers,
-            "error": "Este e-mail já está cadastrado.",
-            "success": None,
-            "reset_link": None,
-            "reset_supplier": None,
-        }, status_code=400)
-    db.add(User(name=name.strip(), company_name=company_name.strip(), email=normalized, password_hash=hash_password(password), role="supplier"))
+        return templates.TemplateResponse(request, "admin_suppliers.html", {"user": current_user(request, db), "suppliers": suppliers, "error": "Este e-mail já está cadastrado.", "reset_link": None, "reset_supplier": None, "created": False}, status_code=400)
+    db.add(User(name=name.strip(), company_name=company_name.strip(), email=normalized, password_hash=hash_password(password), role="supplier", must_change_password=True))
     db.commit()
-    return RedirectResponse("/admin/fornecedores?created=1", 303)
+    return RedirectResponse("/admin/fornecedores?criado=1", 303)
 
 
-@app.post("/admin/fornecedores/{supplier_id}/redefinir-senha")
-def admin_generate_password_reset(supplier_id: int, request: Request, db: Session = Depends(get_db)):
+@app.get("/admin/fornecedores/{supplier_id}/editar", response_class=HTMLResponse)
+def edit_supplier_page(supplier_id: int, request: Request, db: Session = Depends(get_db)):
+    admin = require_role(request, db, "admin")
+    supplier = db.get(User, supplier_id)
+    if not supplier or supplier.role != "supplier":
+        raise HTTPException(404, "Fornecedor não encontrado")
+    return templates.TemplateResponse(
+        request,
+        "admin_supplier_edit.html",
+        {"user": admin, "supplier": supplier, "error": None},
+    )
+
+
+@app.post("/admin/fornecedores/{supplier_id}/editar", response_class=HTMLResponse)
+def edit_supplier_submit(
+    supplier_id: int,
+    request: Request,
+    name: str = Form(...),
+    company_name: str = Form(...),
+    email: str = Form(...),
+    active: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    admin = require_role(request, db, "admin")
+    supplier = db.get(User, supplier_id)
+    if not supplier or supplier.role != "supplier":
+        raise HTTPException(404, "Fornecedor não encontrado")
+
+    normalized = email.strip().lower()
+    duplicate = db.scalar(select(User).where(User.email == normalized, User.id != supplier.id))
+    if duplicate:
+        return templates.TemplateResponse(
+            request,
+            "admin_supplier_edit.html",
+            {"user": admin, "supplier": supplier, "error": "Este e-mail já está sendo usado por outro usuário."},
+            status_code=400,
+        )
+
+    supplier.company_name = company_name.strip()
+    supplier.name = name.strip()
+    supplier.email = normalized
+    supplier.active = active == "1"
+    db.commit()
+    return RedirectResponse("/admin/fornecedores?editado=1", 303)
+
+
+@app.post("/admin/fornecedores/{supplier_id}/excluir")
+def delete_supplier(supplier_id: int, request: Request, db: Session = Depends(get_db)):
     require_role(request, db, "admin")
     supplier = db.get(User, supplier_id)
     if not supplier or supplier.role != "supplier":
         raise HTTPException(404, "Fornecedor não encontrado")
 
-    # Invalida links anteriores ainda não utilizados para evitar múltiplos links ativos.
+    # Exclusão definitiva: remove também respostas e vínculos do fornecedor com cotações.
+    # As cotações e seus produtos permanecem; apenas a participação deste fornecedor é removida.
+    db.execute(delete(QuoteResponse).where(QuoteResponse.supplier_id == supplier.id))
+    db.execute(delete(QuoteSupplier).where(QuoteSupplier.supplier_id == supplier.id))
     db.execute(delete(PasswordResetToken).where(PasswordResetToken.user_id == supplier.id))
+    db.delete(supplier)
+    db.commit()
+    return RedirectResponse("/admin/fornecedores?excluido=1", 303)
+
+
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+@app.post("/admin/fornecedores/{supplier_id}/reset-senha", response_class=HTMLResponse)
+def admin_generate_password_reset(supplier_id: int, request: Request, db: Session = Depends(get_db)):
+    admin = require_role(request, db, "admin")
+    supplier = db.get(User, supplier_id)
+    if not supplier or supplier.role != "supplier":
+        raise HTTPException(404, "Fornecedor não encontrado")
+
+    now = datetime.utcnow()
+    # Invalida links anteriores ainda não utilizados para que apenas o mais recente funcione.
+    previous = db.scalars(
+        select(PasswordResetToken).where(
+            PasswordResetToken.user_id == supplier.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+    ).all()
+    for item in previous:
+        item.used_at = now
+
     raw_token = secrets.token_urlsafe(32)
-    db.add(PasswordResetToken(
+    reset = PasswordResetToken(
         user_id=supplier.id,
         token_hash=token_digest(raw_token),
-        expires_at=datetime.utcnow() + timedelta(hours=1),
-    ))
+        expires_at=now + timedelta(hours=1),
+        created_by_user_id=admin.id,
+    )
+    db.add(reset)
     db.commit()
 
-    request.session["reset_link"] = f"{public_base_url(request)}/redefinir-senha/{raw_token}"
-    request.session["reset_supplier"] = supplier.company_name or supplier.name
-    return RedirectResponse("/admin/fornecedores", 303)
+    public_base_url = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    reset_link = f"{public_base_url}/redefinir-senha/{raw_token}" if public_base_url else str(request.url_for("reset_password_page", token=raw_token))
+    suppliers = db.scalars(select(User).where(User.role == "supplier").order_by(User.company_name, User.name)).all()
+    return templates.TemplateResponse(
+        request,
+        "admin_suppliers.html",
+        {
+            "user": admin,
+            "suppliers": suppliers,
+            "error": None,
+            "reset_link": reset_link,
+            "reset_supplier": supplier,
+            "created": False,
+        },
+    )
+
+
+def find_valid_reset_token(db: Session, raw_token: str) -> Optional[PasswordResetToken]:
+    digest = token_digest(raw_token)
+    reset = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == digest))
+    if not reset or reset.used_at is not None or reset.expires_at < datetime.utcnow():
+        return None
+    return reset
 
 
 @app.get("/redefinir-senha/{token}", response_class=HTMLResponse, name="reset_password_page")
 def reset_password_page(token: str, request: Request, db: Session = Depends(get_db)):
-    record = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_digest(token)))
-    valid = bool(record and record.used_at is None and record.expires_at >= datetime.utcnow())
-    return templates.TemplateResponse(request, "reset_password.html", {
-        "user": None,
-        "token": token,
-        "valid": valid,
-        "error": None,
-        "success": None,
-    })
+    reset = find_valid_reset_token(db, token)
+    supplier = db.get(User, reset.user_id) if reset else None
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {"user": None, "token": token, "valid": bool(reset and supplier and supplier.active), "supplier": supplier, "error": None, "success": False},
+        status_code=200 if reset and supplier and supplier.active else 400,
+    )
 
 
 @app.post("/redefinir-senha/{token}", response_class=HTMLResponse)
-def reset_password(
+def reset_password_submit(
     token: str,
     request: Request,
     password: str = Form(...),
     password_confirm: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    record = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_digest(token)))
-    if not record or record.used_at is not None or record.expires_at < datetime.utcnow():
-        return templates.TemplateResponse(request, "reset_password.html", {
-            "user": None, "token": token, "valid": False, "error": "Este link expirou ou já foi utilizado.", "success": None
-        }, status_code=400)
-    if len(password) < 8:
-        return templates.TemplateResponse(request, "reset_password.html", {
-            "user": None, "token": token, "valid": True, "error": "A nova senha deve ter pelo menos 8 caracteres.", "success": None
-        }, status_code=400)
+    reset = find_valid_reset_token(db, token)
+    supplier = db.get(User, reset.user_id) if reset else None
+    if not reset or not supplier or not supplier.active:
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"user": None, "token": token, "valid": False, "supplier": supplier, "error": "Este link expirou ou já foi utilizado.", "success": False},
+            status_code=400,
+        )
     if password != password_confirm:
-        return templates.TemplateResponse(request, "reset_password.html", {
-            "user": None, "token": token, "valid": True, "error": "As senhas não conferem.", "success": None
-        }, status_code=400)
-
-    supplier = db.get(User, record.user_id)
-    if not supplier or supplier.role != "supplier" or not supplier.active:
-        return templates.TemplateResponse(request, "reset_password.html", {
-            "user": None, "token": token, "valid": False, "error": "Não foi possível redefinir a senha deste usuário.", "success": None
-        }, status_code=400)
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"user": None, "token": token, "valid": True, "supplier": supplier, "error": "As duas senhas não são iguais.", "success": False},
+            status_code=400,
+        )
+    if len(password) < 8:
+        return templates.TemplateResponse(
+            request,
+            "reset_password.html",
+            {"user": None, "token": token, "valid": True, "supplier": supplier, "error": "A nova senha deve ter pelo menos 8 caracteres.", "success": False},
+            status_code=400,
+        )
 
     supplier.password_hash = hash_password(password)
-    record.used_at = datetime.utcnow()
+    supplier.must_change_password = False
+    reset.used_at = datetime.utcnow()
+    # Invalida qualquer outro link de redefinição que tenha sido criado para o mesmo fornecedor.
+    remaining = db.scalars(
+        select(PasswordResetToken).where(
+            PasswordResetToken.user_id == supplier.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+    ).all()
+    for item in remaining:
+        item.used_at = reset.used_at
     db.commit()
-    return templates.TemplateResponse(request, "reset_password.html", {
-        "user": None, "token": token, "valid": False, "error": None, "success": "Senha alterada com sucesso. Você já pode entrar com a nova senha."
-    })
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {"user": None, "token": token, "valid": False, "supplier": supplier, "error": None, "success": True},
+    )
 
 
 @app.get("/admin/cotacoes/nova", response_class=HTMLResponse)
@@ -406,17 +524,78 @@ def export_quote_excel(quote_id: int, request: Request, db: Session = Depends(ge
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
+@app.get("/fornecedor/alterar-senha", response_class=HTMLResponse)
+def supplier_change_password_page(request: Request, db: Session = Depends(get_db)):
+    user = require_role(request, db, "supplier")
+    return templates.TemplateResponse(
+        request,
+        "change_password.html",
+        {"user": user, "first_access": bool(user.must_change_password), "error": None},
+    )
+
+
+@app.post("/fornecedor/alterar-senha", response_class=HTMLResponse)
+def supplier_change_password_submit(
+    request: Request,
+    current_password: str = Form(default=""),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = require_role(request, db, "supplier")
+    first_access = bool(user.must_change_password)
+
+    if not first_access and not verify_password(current_password, user.password_hash):
+        return templates.TemplateResponse(
+            request,
+            "change_password.html",
+            {"user": user, "first_access": False, "error": "A senha atual está incorreta."},
+            status_code=400,
+        )
+    if password != password_confirm:
+        return templates.TemplateResponse(
+            request,
+            "change_password.html",
+            {"user": user, "first_access": first_access, "error": "As duas senhas novas não são iguais."},
+            status_code=400,
+        )
+    if len(password) < 8:
+        return templates.TemplateResponse(
+            request,
+            "change_password.html",
+            {"user": user, "first_access": first_access, "error": "A nova senha deve ter pelo menos 8 caracteres."},
+            status_code=400,
+        )
+    if verify_password(password, user.password_hash):
+        return templates.TemplateResponse(
+            request,
+            "change_password.html",
+            {"user": user, "first_access": first_access, "error": "Escolha uma senha diferente da senha atual/provisória."},
+            status_code=400,
+        )
+
+    user.password_hash = hash_password(password)
+    user.must_change_password = False
+    db.commit()
+    return RedirectResponse("/fornecedor?senha=alterada", 303)
+
+
 @app.get("/fornecedor", response_class=HTMLResponse)
 def supplier_dashboard(request: Request, db: Session = Depends(get_db)):
     user = require_role(request, db, "supplier")
+    if user.must_change_password:
+        return RedirectResponse("/fornecedor/alterar-senha", 303)
     quote_ids = db.scalars(select(QuoteSupplier.quote_id).where(QuoteSupplier.supplier_id == user.id)).all()
     quotes = db.scalars(select(Quote).where(Quote.id.in_(quote_ids)).order_by(Quote.deadline.desc())).all() if quote_ids else []
-    return templates.TemplateResponse(request, "supplier_dashboard.html", {"user": user, "quotes": quotes, "now": now_local()})
+    password_changed = request.query_params.get("senha") == "alterada"
+    return templates.TemplateResponse(request, "supplier_dashboard.html", {"user": user, "quotes": quotes, "now": now_local(), "password_changed": password_changed})
 
 
 @app.get("/fornecedor/cotacoes/{quote_id}", response_class=HTMLResponse)
 def supplier_quote_page(quote_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_role(request, db, "supplier")
+    if user.must_change_password:
+        return RedirectResponse("/fornecedor/alterar-senha", 303)
     allowed = db.scalar(select(QuoteSupplier).where(and_(QuoteSupplier.quote_id == quote_id, QuoteSupplier.supplier_id == user.id)))
     if not allowed:
         raise HTTPException(403)
@@ -431,6 +610,8 @@ def supplier_quote_page(quote_id: int, request: Request, db: Session = Depends(g
 @app.post("/fornecedor/cotacoes/{quote_id}")
 async def supplier_save_quote(quote_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_role(request, db, "supplier")
+    if user.must_change_password:
+        return RedirectResponse("/fornecedor/alterar-senha", 303)
     allowed = db.scalar(select(QuoteSupplier).where(and_(QuoteSupplier.quote_id == quote_id, QuoteSupplier.supplier_id == user.id)))
     quote = db.scalar(select(Quote).where(Quote.id == quote_id).options(selectinload(Quote.items)))
     if not allowed or not quote:

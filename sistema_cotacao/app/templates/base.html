@@ -11,7 +11,7 @@
   <div class="brand">Sistema de Cotação</div>
   {% if user %}
   <div class="nav">
-    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/fornecedores">Fornecedores</a>{% else %}<a href="/fornecedor">Minhas cotações</a>{% endif %}
+    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/fornecedores">Fornecedores</a>{% else %}<a href="/fornecedor">Minhas cotações</a><a href="/fornecedor/alterar-senha">Alterar senha</a>{% endif %}
     <span>{{ user.name }}</span>
     <form action="/logout" method="post"><button class="link-btn">Sair</button></form>
   </div>
