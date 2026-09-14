@@ -451,14 +451,61 @@ def admin_quote_detail(quote_id: int, request: Request, db: Session = Depends(ge
     quote = db.scalar(select(Quote).where(Quote.id == quote_id).options(selectinload(Quote.items).selectinload(QuoteItem.responses).selectinload(QuoteResponse.supplier)))
     if not quote:
         raise HTTPException(404)
-    supplier_ids = db.scalars(select(QuoteSupplier.supplier_id).where(QuoteSupplier.quote_id == quote_id)).all()
-    suppliers = db.scalars(select(User).where(User.id.in_(supplier_ids))).all() if supplier_ids else []
+    supplier_ids = list(db.scalars(select(QuoteSupplier.supplier_id).where(QuoteSupplier.quote_id == quote_id)).all())
+    suppliers = db.scalars(select(User).where(User.id.in_(supplier_ids)).order_by(User.company_name, User.name)).all() if supplier_ids else []
+    all_active_suppliers = db.scalars(
+        select(User).where(and_(User.role == "supplier", User.active == True)).order_by(User.company_name, User.name)
+    ).all()
+    current_ids = set(supplier_ids)
+    available_suppliers = [supplier for supplier in all_active_suppliers if supplier.id not in current_ids]
     summary = []
     for item in quote.items:
         valid = [r for r in item.responses if r.normalized_price is not None]
         valid.sort(key=lambda r: r.normalized_price)
         summary.append({"item": item, "responses": valid, "min": valid[0] if valid else None, "max": valid[-1] if valid else None})
-    return templates.TemplateResponse(request, "admin_quote_detail.html", {"user": user, "quote": quote, "suppliers": suppliers, "summary": summary, "now": now_local()})
+    return templates.TemplateResponse(
+        request,
+        "admin_quote_detail.html",
+        {
+            "user": user,
+            "quote": quote,
+            "suppliers": suppliers,
+            "available_suppliers": available_suppliers,
+            "summary": summary,
+            "now": now_local(),
+            "supplier_added": request.query_params.get("fornecedor_adicionado") == "1",
+            "supplier_already_added": request.query_params.get("fornecedor_ja_adicionado") == "1",
+        },
+    )
+
+
+@app.post("/admin/cotacoes/{quote_id}/fornecedores/adicionar")
+def add_supplier_to_quote(
+    quote_id: int,
+    request: Request,
+    supplier_id: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    require_role(request, db, "admin")
+    quote = db.get(Quote, quote_id)
+    if not quote:
+        raise HTTPException(404)
+
+    supplier = db.get(User, supplier_id)
+    if not supplier or supplier.role != "supplier" or not supplier.active:
+        raise HTTPException(400, "Fornecedor inválido ou inativo")
+
+    existing = db.scalar(
+        select(QuoteSupplier).where(
+            and_(QuoteSupplier.quote_id == quote_id, QuoteSupplier.supplier_id == supplier_id)
+        )
+    )
+    if existing:
+        return RedirectResponse(f"/admin/cotacoes/{quote_id}?fornecedor_ja_adicionado=1", 303)
+
+    db.add(QuoteSupplier(quote_id=quote_id, supplier_id=supplier_id))
+    db.commit()
+    return RedirectResponse(f"/admin/cotacoes/{quote_id}?fornecedor_adicionado=1", 303)
 
 
 @app.post("/admin/respostas/{response_id}/editar")

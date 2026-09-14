@@ -2,7 +2,48 @@
 {% block title %}{{ quote.title }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>{{ quote.title }}</h1><p class="muted">Prazo atual: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }} · {{ suppliers|length }} fornecedor(es)</p></div><a class="button" href="/admin/cotacoes/{{ quote.id }}/excel">Exportar Excel</a></div>
+
+{% if supplier_added %}<div class="success">Fornecedor acrescentado à cotação. Ele já poderá visualizar esta cotação ao entrar no sistema.</div>{% endif %}
+{% if supplier_already_added %}<div class="info">Esse fornecedor já participa desta cotação.</div>{% endif %}
+
 <div class="card inline-form"><form method="post" action="/admin/cotacoes/{{ quote.id }}/prazo"><label>Alterar / reabrir prazo <input type="datetime-local" name="deadline" value="{{ quote.deadline.strftime('%Y-%m-%dT%H:%M') }}" required></label><button>Salvar prazo</button></form></div>
+
+<div class="card">
+  <div class="participant-head">
+    <div>
+      <h2>Fornecedores da cotação</h2>
+      <p class="muted">Você pode acrescentar fornecedores mesmo depois de criar a cotação.</p>
+    </div>
+  </div>
+
+  <div class="participant-list">
+    {% for s in suppliers %}
+      <span class="participant-chip">{{ s.company_name or s.name }} <small>{{ s.email }}</small></span>
+    {% else %}
+      <span class="muted">Nenhum fornecedor vinculado.</span>
+    {% endfor %}
+  </div>
+
+  {% if available_suppliers %}
+  <form method="post" action="/admin/cotacoes/{{ quote.id }}/fornecedores/adicionar" class="add-supplier-form">
+    <label>Adicionar fornecedor
+      <select name="supplier_id" required>
+        <option value="">Selecione...</option>
+        {% for s in available_suppliers %}
+          <option value="{{ s.id }}">{{ s.company_name or s.name }} — {{ s.email }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="primary" type="submit">Adicionar à cotação</button>
+  </form>
+  {% else %}
+    <p class="muted small-note">Todos os fornecedores ativos já participam desta cotação.</p>
+  {% endif %}
+
+  {% if quote.deadline < now %}
+    <div class="info small-note">O prazo desta cotação já venceu. Um fornecedor novo será incluído, mas só conseguirá enviar preços depois que você alterar ou reabrir o prazo acima.</div>
+  {% endif %}
+</div>
 
 <div class="card table-wrap">
 <h2>Mapa comparativo</h2>

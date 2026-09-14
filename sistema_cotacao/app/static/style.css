@@ -5,3 +5,5 @@
 .pending{background:#fef3c7;color:#92400e}.small-note{font-size:13px;margin-top:14px}
 
 .danger{background:#dc2626;color:#fff;border-color:#dc2626}.compact{padding:6px 9px;font-size:13px;white-space:nowrap}.action-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.action-row form{margin:0}.narrow-form{max-width:620px}.status-check{display:flex;grid-template-columns:auto 1fr;align-items:center;gap:8px}.status-check input{width:auto}.form-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.participant-list{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 18px}.participant-chip{display:inline-flex;align-items:center;gap:7px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:7px 10px;font-weight:700}.participant-chip small{font-weight:500;color:#64748b}.add-supplier-form{display:grid;grid-template-columns:minmax(280px,1fr) auto;gap:10px;align-items:end;max-width:900px}.participant-head h2{margin-bottom:4px}@media(max-width:700px){.add-supplier-form{grid-template-columns:1fr}.participant-chip{width:100%;justify-content:space-between}}
