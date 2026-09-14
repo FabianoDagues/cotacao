@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Entrar{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Acesso</h1>
+  <p class="muted">Entre com seu e-mail e senha.</p>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="stack">
+    <label>E-mail<input type="email" name="email" required></label>
+    <label>Senha<input type="password" name="password" required></label>
+    <button class="primary">Entrar</button>
+  </form>
+</div>
+{% endblock %}

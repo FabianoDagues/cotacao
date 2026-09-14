@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cotacoes
+      POSTGRES_USER: cotacoes
+      POSTGRES_PASSWORD: troque-esta-senha
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://cotacoes:troque-esta-senha@db:5432/cotacoes
+      SECRET_KEY: troque-por-uma-chave-longa-e-aleatoria
+      ADMIN_EMAIL: admin@suaempresa.com.br
+      ADMIN_PASSWORD: TroqueEstaSenha123!
+      ADMIN_NAME: Administrador
+      COOKIE_SECURE: "0"
+      APP_TIMEZONE: America/Sao_Paulo
+volumes:
+  postgres_data:

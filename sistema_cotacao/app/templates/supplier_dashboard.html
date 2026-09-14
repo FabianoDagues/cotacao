@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block title %}Minhas cotações{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Minhas cotações</h1><p class="muted">Você vê apenas as cotações enviadas para sua empresa. Preços de outros fornecedores não são exibidos.</p></div></div>
+<div class="card table-wrap"><table><thead><tr><th>Cotação</th><th>Prazo</th><th>Status</th><th></th></tr></thead><tbody>
+{% for q in quotes %}<tr><td>{{ q.title }}</td><td>{{ q.deadline.strftime('%d/%m/%Y %H:%M') }}</td><td>{% if now <= q.deadline %}<span class="badge open">Aberta</span>{% else %}<span class="badge closed">Encerrada</span>{% endif %}</td><td><a href="/fornecedor/cotacoes/{{ q.id }}">Abrir</a></td></tr>{% else %}<tr><td colspan="4">Nenhuma cotação disponível.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

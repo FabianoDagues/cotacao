@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Fornecedores{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Fornecedores</h1><p class="muted">Cada fornecedor terá login próprio.</p></div></div>
+<div class="grid two">
+<div class="card"><h2>Novo fornecedor</h2>{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+<form method="post" class="stack"><label>Empresa<input name="company_name" required></label><label>Contato<input name="name" required></label><label>E-mail<input type="email" name="email" required></label><label>Senha inicial<input type="password" name="password" minlength="8" required></label><button class="primary">Cadastrar</button></form></div>
+<div class="card table-wrap"><h2>Cadastrados</h2><table><thead><tr><th>Empresa</th><th>Contato</th><th>E-mail</th></tr></thead><tbody>{% for s in suppliers %}<tr><td>{{ s.company_name }}</td><td>{{ s.name }}</td><td>{{ s.email }}</td></tr>{% else %}<tr><td colspan="3">Nenhum fornecedor.</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endblock %}

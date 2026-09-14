@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block title %}{{ quote.title }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>{{ quote.title }}</h1><p class="muted">Prazo: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }}</p></div></div>
+<div class="info"><strong>Como preencher:</strong> se o produto-base é UN e você vende uma caixa com 20, informe unidade “CX”, fator “20” e o preço da caixa. O sistema calculará o equivalente por unidade.</div>
+{% if now <= quote.deadline %}
+<form method="post"><div class="card table-wrap"><table class="wide supplier-table"><thead><tr><th>Código</th><th>Produto</th><th>Qtd.</th><th>Base</th><th>Unid. cotada</th><th>Fator p/ base</th><th>Preço</th><th>Marca</th><th>Entrega dias</th><th>Observação</th></tr></thead><tbody>
+{% for item in quote.items %}{% set r = responses.get(item.id) %}<tr><td>{{ item.code }}</td><td>{{ item.description }}</td><td>{{ item.requested_qty }}</td><td>{{ item.base_unit }}</td>
+<td><input name="unit_{{ item.id }}" value="{{ r.offered_unit if r else item.base_unit }}"></td><td><input name="factor_{{ item.id }}" value="{{ r.base_units_per_offered_unit if r else 1 }}" inputmode="decimal"></td><td><input name="price_{{ item.id }}" value="{{ r.offered_price if r else '' }}" inputmode="decimal" placeholder="0,00"></td><td><input name="brand_{{ item.id }}" value="{{ r.brand if r and r.brand else '' }}"></td><td><input name="delivery_{{ item.id }}" type="number" min="0" value="{{ r.delivery_days if r and r.delivery_days is not none else '' }}"></td><td><input name="notes_{{ item.id }}" value="{{ r.notes if r and r.notes else '' }}"></td></tr>{% endfor %}
+</tbody></table></div><div class="actions"><button class="primary">Salvar minha cotação</button></div></form>
+{% else %}<div class="alert">O prazo desta cotação encerrou. Os valores estão bloqueados para edição.</div><div class="card table-wrap"><table><thead><tr><th>Produto</th><th>Preço enviado</th><th>Unidade</th><th>Fator</th></tr></thead><tbody>{% for item in quote.items %}{% set r = responses.get(item.id) %}<tr><td>{{ item.description }}</td><td>{% if r %}R$ {{ r.offered_price }}{% else %}—{% endif %}</td><td>{{ r.offered_unit if r else '—' }}</td><td>{{ r.base_units_per_offered_unit if r else '—' }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+{% endblock %}

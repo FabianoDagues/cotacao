@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Nova cotação{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Nova cotação</h1><p class="muted">Importe produtos de Excel ou CSV e escolha os fornecedores convidados.</p></div></div>
+<div class="card">
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="stack">
+<label>Nome da cotação<input name="title" placeholder="Ex.: Materiais de escritório - setembro" required></label>
+<label>Data e hora limite<input type="datetime-local" name="deadline" required></label>
+<label>Planilha de produtos<input type="file" name="product_file" accept=".xlsx,.csv" required><small>Colunas aceitas: Código, Produto, Quantidade, Unidade.</small></label>
+<fieldset><legend>Fornecedores</legend><div class="checks">{% for s in suppliers %}<label class="check"><input type="checkbox" name="suppliers" value="{{ s.id }}"> <span>{{ s.company_name or s.name }} — {{ s.email }}</span></label>{% else %}<p>Cadastre fornecedores primeiro.</p>{% endfor %}</div></fieldset>
+<button class="primary">Criar cotação</button>
+</form></div>
+{% endblock %}

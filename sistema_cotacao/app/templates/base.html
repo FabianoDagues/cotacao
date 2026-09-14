@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Sistema de Cotação{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Sistema de Cotação</div>
+  {% if user %}
+  <div class="nav">
+    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/fornecedores">Fornecedores</a>{% else %}<a href="/fornecedor">Minhas cotações</a>{% endif %}
+    <span>{{ user.name }}</span>
+    <form action="/logout" method="post"><button class="link-btn">Sair</button></form>
+  </div>
+  {% endif %}
+</header>
+<main class="container">{% block content %}{% endblock %}</main>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}{{ quote.title }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>{{ quote.title }}</h1><p class="muted">Prazo atual: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }} · {{ suppliers|length }} fornecedor(es)</p></div><a class="button" href="/admin/cotacoes/{{ quote.id }}/excel">Exportar Excel</a></div>
+<div class="card inline-form"><form method="post" action="/admin/cotacoes/{{ quote.id }}/prazo"><label>Alterar / reabrir prazo <input type="datetime-local" name="deadline" value="{{ quote.deadline.strftime('%Y-%m-%dT%H:%M') }}" required></label><button>Salvar prazo</button></form></div>
+
+<div class="card table-wrap">
+<h2>Mapa comparativo</h2>
+<table class="wide"><thead><tr><th>Código</th><th>Produto</th><th>Qtd.</th><th>Base</th><th>Menor preço</th><th>Fornecedor menor</th><th>Maior preço</th><th>Fornecedor maior</th></tr></thead><tbody>
+{% for row in summary %}<tr><td>{{ row.item.code }}</td><td>{{ row.item.description }}</td><td>{{ row.item.requested_qty }}</td><td>{{ row.item.base_unit }}</td>
+<td>{% if row.min %}R$ {{ '%.4f'|format(row.min.normalized_price) }} / {{ row.item.base_unit }}{% else %}—{% endif %}</td>
+<td>{% if row.min %}{{ row.min.supplier.company_name or row.min.supplier.name }}{% else %}—{% endif %}</td>
+<td>{% if row.max %}R$ {{ '%.4f'|format(row.max.normalized_price) }} / {{ row.item.base_unit }}{% else %}—{% endif %}</td>
+<td>{% if row.max %}{{ row.max.supplier.company_name or row.max.supplier.name }}{% else %}—{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+
+{% for row in summary %}
+<div class="card"><h3>{{ row.item.code }} — {{ row.item.description }}</h3><p class="muted">Solicitado: {{ row.item.requested_qty }} {{ row.item.base_unit }}. O “fator” indica quantas unidades-base existem em 1 unidade cotada.</p>
+<div class="table-wrap"><table><thead><tr><th>Fornecedor</th><th>Unid. cotada</th><th>Fator</th><th>Preço informado</th><th>Preço normalizado</th><th>Marca</th><th>Entrega</th><th>Ajuste admin</th></tr></thead><tbody>
+{% for r in row.responses %}<tr><td>{{ r.supplier.company_name or r.supplier.name }}</td><td>{{ r.offered_unit }}</td><td>{{ r.base_units_per_offered_unit }}</td><td>R$ {{ '%.4f'|format(r.offered_price) }}</td><td><strong>R$ {{ '%.4f'|format(r.normalized_price) }} / {{ row.item.base_unit }}</strong></td><td>{{ r.brand or '—' }}</td><td>{% if r.delivery_days is not none %}{{ r.delivery_days }} dias{% else %}—{% endif %}</td><td>
+<form method="post" action="/admin/respostas/{{ r.id }}/editar" class="mini-form"><input name="offered_unit" value="{{ r.offered_unit }}" title="Unidade cotada"><input name="factor" value="{{ r.base_units_per_offered_unit }}" title="Fator"><input name="offered_price" value="{{ r.offered_price }}" title="Preço"><button>Corrigir</button></form></td></tr>
+{% else %}<tr><td colspan="8">Ainda sem propostas para este item.</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% endfor %}
+{% endblock %}
