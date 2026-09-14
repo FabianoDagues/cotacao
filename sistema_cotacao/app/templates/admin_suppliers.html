@@ -2,9 +2,35 @@
 {% block title %}Fornecedores{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>Fornecedores</h1><p class="muted">Cada fornecedor terá login próprio.</p></div></div>
-<div class="grid two">
-<div class="card"><h2>Novo fornecedor</h2>{% if error %}<div class="alert">{{ error }}</div>{% endif %}
-<form method="post" class="stack"><label>Empresa<input name="company_name" required></label><label>Contato<input name="name" required></label><label>E-mail<input type="email" name="email" required></label><label>Senha inicial<input type="password" name="password" minlength="8" required></label><button class="primary">Cadastrar</button></form></div>
-<div class="card table-wrap"><h2>Cadastrados</h2><table><thead><tr><th>Empresa</th><th>Contato</th><th>E-mail</th></tr></thead><tbody>{% for s in suppliers %}<tr><td>{{ s.company_name }}</td><td>{{ s.name }}</td><td>{{ s.email }}</td></tr>{% else %}<tr><td colspan="3">Nenhum fornecedor.</td></tr>{% endfor %}</tbody></table></div>
+{% if reset_link %}
+<div class="card reset-box">
+  <h2>Link para redefinir senha</h2>
+  <p>Envie este link para <strong>{{ reset_supplier }}</strong>. Ele é válido por 1 hora e funciona apenas uma vez.</p>
+  <div class="copy-row">
+    <input id="reset-link" value="{{ reset_link }}" readonly>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('reset-link').value); this.textContent='Copiado!';">Copiar link</button>
+  </div>
+  <p class="muted">Por segurança, ao gerar um novo link para este fornecedor, qualquer link anterior deixa de funcionar.</p>
 </div>
+{% endif %}
+<div class="grid two">
+<div class="card"><h2>Novo fornecedor</h2>
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% if success %}<div class="success">{{ success }}</div>{% endif %}
+<form method="post" class="stack" autocomplete="off" id="supplier-form">
+  <label>Empresa<input name="company_name" required autocomplete="organization"></label>
+  <label>Contato<input name="name" required autocomplete="off"></label>
+  <label>E-mail<input type="email" name="email" required autocomplete="off"></label>
+  <label>Senha inicial<input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+  <button class="primary">Cadastrar</button>
+</form></div>
+<div class="card table-wrap"><h2>Cadastrados</h2><table><thead><tr><th>Empresa</th><th>Contato</th><th>E-mail</th><th>Senha</th></tr></thead><tbody>
+{% for s in suppliers %}
+<tr><td>{{ s.company_name }}</td><td>{{ s.name }}</td><td>{{ s.email }}</td><td>
+<form method="post" action="/admin/fornecedores/{{ s.id }}/redefinir-senha"><button type="submit">Gerar link de redefinição</button></form>
+</td></tr>
+{% else %}<tr><td colspan="4">Nenhum fornecedor.</td></tr>{% endfor %}
+</tbody></table></div>
+</div>
+{% if success %}<script>document.getElementById('supplier-form')?.reset();</script>{% endif %}
 {% endblock %}
