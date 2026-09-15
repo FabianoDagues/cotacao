@@ -1,27 +1,63 @@
 {% extends 'base.html' %}
 {% block title %}{{ quote.title }}{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>{{ quote.title }}</h1><p class="muted">Prazo atual: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }} · {{ suppliers|length }} fornecedor(es)</p></div><a class="button" href="/admin/cotacoes/{{ quote.id }}/excel">Exportar Excel</a></div>
+<div class="page-head">
+  <div>
+    <h1>{{ quote.title }}</h1>
+    <p class="muted">Prazo atual: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }} · {{ suppliers|length }} fornecedor(es)</p>
+  </div>
+  <a class="button" href="/admin/cotacoes/{{ quote.id }}/excel">Exportar Excel</a>
+</div>
 
 {% if supplier_added %}<div class="success">Fornecedor acrescentado à cotação. Ele já poderá visualizar esta cotação ao entrar no sistema.</div>{% endif %}
 {% if supplier_already_added %}<div class="info">Esse fornecedor já participa desta cotação.</div>{% endif %}
 
-<div class="card inline-form"><form method="post" action="/admin/cotacoes/{{ quote.id }}/prazo"><label>Alterar / reabrir prazo <input type="datetime-local" name="deadline" value="{{ quote.deadline.strftime('%Y-%m-%dT%H:%M') }}" required></label><button>Salvar prazo</button></form></div>
+{% if participants %}
+  {% if pending_participants|length == 0 %}
+    <div class="success submission-summary"><strong>Todos os fornecedores enviaram a cotação.</strong> Você já pode fazer o fechamento dos pedidos.</div>
+  {% else %}
+    <div class="warning submission-summary">
+      <strong>Recebidas: {{ sent_participants|length }} de {{ participants|length }}.</strong>
+      Ainda faltam:
+      {% for row in pending_participants %}<strong>{{ row.supplier.company_name or row.supplier.name }}</strong>{% if not loop.last %}, {% endif %}{% endfor %}.
+    </div>
+  {% endif %}
+{% endif %}
+
+<div class="card inline-form">
+  <form method="post" action="/admin/cotacoes/{{ quote.id }}/prazo">
+    <label>Alterar / reabrir prazo
+      <input type="datetime-local" name="deadline" value="{{ quote.deadline.strftime('%Y-%m-%dT%H:%M') }}" required>
+    </label>
+    <button>Salvar prazo</button>
+  </form>
+</div>
 
 <div class="card">
   <div class="participant-head">
     <div>
       <h2>Fornecedores da cotação</h2>
-      <p class="muted">Você pode acrescentar fornecedores mesmo depois de criar a cotação.</p>
+      <p class="muted">Acompanhe quem já enviou e abra o fechamento por fornecedor.</p>
     </div>
   </div>
 
-  <div class="participant-list">
-    {% for s in suppliers %}
-      <span class="participant-chip">{{ s.company_name or s.name }} <small>{{ s.email }}</small></span>
-    {% else %}
-      <span class="muted">Nenhum fornecedor vinculado.</span>
-    {% endfor %}
+  <div class="table-wrap participant-table-wrap">
+    <table>
+      <thead><tr><th>Fornecedor</th><th>E-mail</th><th>Status da cotação</th><th>Último envio</th><th>Fechamento</th></tr></thead>
+      <tbody>
+      {% for row in participants %}
+        <tr>
+          <td><strong>{{ row.supplier.company_name or row.supplier.name }}</strong></td>
+          <td>{{ row.supplier.email }}</td>
+          <td>{% if row.submitted_at %}<span class="badge open">Enviado</span>{% else %}<span class="badge pending">Pendente</span>{% endif %}</td>
+          <td>{% if row.submitted_at %}{{ row.submitted_at.strftime('%d/%m/%Y %H:%M') }}{% else %}—{% endif %}</td>
+          <td><a class="button compact" href="/admin/cotacoes/{{ quote.id }}/pedidos/{{ row.supplier.id }}">Fechamento / pedido</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">Nenhum fornecedor vinculado.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
 
   {% if available_suppliers %}
@@ -56,11 +92,24 @@
 </tbody></table></div>
 
 {% for row in summary %}
-<div class="card"><h3>{{ row.item.code }} — {{ row.item.description }}</h3><p class="muted">Solicitado: {{ row.item.requested_qty }} {{ row.item.base_unit }}. O “fator” indica quantas unidades-base existem em 1 unidade cotada.</p>
+<div class="card" id="item-{{ row.item.id }}"><h3>{{ row.item.code }} — {{ row.item.description }}</h3><p class="muted">Solicitado: {{ row.item.requested_qty }} {{ row.item.base_unit }}. O “fator” indica quantas unidades-base existem em 1 unidade cotada.</p>
 <div class="table-wrap"><table><thead><tr><th>Fornecedor</th><th>Unid. cotada</th><th>Fator</th><th>Preço informado</th><th>Preço normalizado</th><th>Marca</th><th>Entrega</th><th>Ajuste admin</th></tr></thead><tbody>
-{% for r in row.responses %}<tr><td>{{ r.supplier.company_name or r.supplier.name }}</td><td>{{ r.offered_unit }}</td><td>{{ r.base_units_per_offered_unit }}</td><td>R$ {{ '%.4f'|format(r.offered_price) }}</td><td><strong>R$ {{ '%.4f'|format(r.normalized_price) }} / {{ row.item.base_unit }}</strong></td><td>{{ r.brand or '—' }}</td><td>{% if r.delivery_days is not none %}{{ r.delivery_days }} dias{% else %}—{% endif %}</td><td>
-<form method="post" action="/admin/respostas/{{ r.id }}/editar" class="mini-form"><input name="offered_unit" value="{{ r.offered_unit }}" title="Unidade cotada"><input name="factor" value="{{ r.base_units_per_offered_unit }}" title="Fator"><input name="offered_price" value="{{ r.offered_price }}" title="Preço"><button>Corrigir</button></form></td></tr>
+{% for r in row.responses %}
+<tr id="resp-{{ r.id }}" class="{% if corrected_response_id == r.id %}row-corrected{% endif %}">
+<td>{{ r.supplier.company_name or r.supplier.name }}</td><td>{{ r.offered_unit }}</td><td>{{ r.base_units_per_offered_unit }}</td><td>R$ {{ '%.4f'|format(r.offered_price) }}</td><td><strong>R$ {{ '%.4f'|format(r.normalized_price) }} / {{ row.item.base_unit }}</strong></td><td>{{ r.brand or '—' }}</td><td>{% if r.delivery_days is not none %}{{ r.delivery_days }} dias{% else %}—{% endif %}</td><td>
+<form method="post" action="/admin/respostas/{{ r.id }}/editar" class="mini-form"><input name="offered_unit" value="{{ r.offered_unit }}" title="Unidade cotada"><input name="factor" value="{{ r.base_units_per_offered_unit }}" title="Fator"><input name="offered_price" value="{{ r.offered_price }}" title="Preço"><button>Corrigir</button></form>
+{% if corrected_response_id == r.id %}<div class="inline-success">✓ Correção salva</div>{% endif %}
+</td></tr>
 {% else %}<tr><td colspan="8">Ainda sem propostas para este item.</td></tr>{% endfor %}
 </tbody></table></div></div>
 {% endfor %}
+
+{% if corrected_response_id %}
+<script>
+window.addEventListener('load', function () {
+  const target = document.getElementById('resp-{{ corrected_response_id }}');
+  if (target) setTimeout(() => target.scrollIntoView({block: 'center'}), 60);
+});
+</script>
+{% endif %}
 {% endblock %}

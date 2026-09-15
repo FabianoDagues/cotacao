@@ -2,6 +2,7 @@
 {% block title %}{{ quote.title }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>{{ quote.title }}</h1><p class="muted">Prazo: {{ quote.deadline.strftime('%d/%m/%Y %H:%M') }}</p></div></div>
+{% if saved %}<div class="success"><strong>Cotação salva e enviada com sucesso.</strong> Seus valores já estão disponíveis para o comprador. Você pode voltar e alterá-los novamente enquanto o prazo estiver aberto.</div>{% endif %}
 <div class="info"><strong>Como preencher:</strong> se o produto-base é UN e você vende uma caixa com 20, informe unidade “CX”, fator “20” e o preço da caixa. O sistema calculará o equivalente por unidade.</div>
 {% if now <= quote.deadline %}
 <form method="post"><div class="card table-wrap"><table class="wide supplier-table"><thead><tr><th>Código</th><th>Produto</th><th>Qtd.</th><th>Base</th><th>Unid. cotada</th><th>Fator p/ base</th><th>Preço</th><th>Marca</th><th>Entrega dias</th><th>Observação</th></tr></thead><tbody>
