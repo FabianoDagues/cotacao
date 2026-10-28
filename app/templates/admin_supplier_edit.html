@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Editar fornecedor{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Editar fornecedor</h1><p class="muted">Corrija os dados cadastrais ou desative temporariamente o acesso.</p></div>
+  <a class="button" href="/admin/fornecedores">Voltar</a>
+</div>
+
+<div class="card narrow-form">
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" class="stack">
+    <label>Empresa<input name="company_name" value="{{ supplier.company_name or '' }}" required></label>
+    <label>Contato<input name="name" value="{{ supplier.name }}" required></label>
+    <label>E-mail<input type="email" name="email" value="{{ supplier.email }}" required></label>
+    <label class="check status-check"><input type="checkbox" name="active" value="1" {% if supplier.active %}checked{% endif %}> Fornecedor ativo</label>
+    <p class="muted small-note">Ao desativar, o fornecedor não consegue entrar e deixa de aparecer para novas cotações. O histórico existente é preservado.</p>
+    <div class="form-actions">
+      <button class="primary" type="submit">Salvar alterações</button>
+      <a class="button" href="/admin/fornecedores">Cancelar</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

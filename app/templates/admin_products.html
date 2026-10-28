@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Produtos{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Catálogo de produtos</h1><p>Cadastre uma vez e utilize nas próximas cotações.</p></div>{% if quote %}<a class="button" href="/admin/cotacoes/{{ quote.id }}">Voltar à cotação</a>{% endif %}</div>
+{% if quote %}<div class="info"><strong>Incluindo em: {{ quote.title }}</strong><p>Busque ou escaneie, confira o produto e informe a quantidade. Cada leitura precisa de confirmação.</p></div>{% endif %}
+{% if message %}<div class="info" role="status">{{ message }}</div>{% endif %}
+<div class="card">
+<form method="get" class="stack" id="search-form"><input type="hidden" name="quote_id" value="{{ quote_id }}"><label>Nome, código interno ou código de barras<input id="search" name="q" value="{{ q }}" placeholder="Ex.: arroz ou código da embalagem" autocomplete="off"></label><button class="primary">Buscar produto</button></form>
+<p><button type="button" id="scan-search">Ler código pela câmera</button> <button type="button" id="stop-scan" hidden>Fechar câmera</button></p>
+<p id="camera-status" role="status" aria-live="polite"></p><div id="reader" style="max-width:520px;margin:auto"></div>
+<p class="muted">Aponte a câmera traseira para o código. Se não conseguir ler, digite os números da embalagem.</p>
+</div>
+<div class="card"><h2>Produtos {% if q %}encontrados{% endif %}</h2>
+{% if more %}<p>Mostrando 200 resultados. Refine sua busca.</p>{% endif %}
+<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Código / GTIN</th><th>Unidade</th><th>Ações</th></tr></thead><tbody>
+{% for p in products %}<tr><td><strong>{{ p.description }}</strong>{% if not p.active %}<br>Inativo{% endif %}</td><td>{{ p.code }}<br><small>{{ p.barcode or 'Sem código de barras vinculado' }}</small></td><td>{{ p.base_unit }}</td><td><a href="/admin/produtos?edit={{ p.id }}&quote_id={{ quote_id }}#cadastro">Editar / vincular código</a>
+{% if quote and p.active %}<form method="post" action="/admin/cotacoes/{{ quote_id }}/produtos" class="stack"><input type="hidden" name="product_id" value="{{ p.id }}"><label>Quantidade ({{ p.base_unit }})<input name="quantity" inputmode="decimal" value="1" required aria-label="Quantidade de {{ p.description }}"></label><button class="primary">Adicionar à cotação</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="4">Nenhum produto encontrado. Cadastre abaixo ou busque pelo nome e edite para vincular este código.</td></tr>{% endfor %}
+</tbody></table></div></div>
+<div class="card" id="cadastro"><h2>{{ 'Editar produto' if editing else 'Cadastrar produto' }}</h2><p>Informe marca e embalagem no nome quando precisar cotar um produto específico. O GTIN é exibido com 14 dígitos, preservando zeros.</p>
+<form method="post" action="/admin/produtos/salvar" class="stack">
+<input type="hidden" name="id" value="{{ editing.id if editing else '' }}"><input type="hidden" name="quote_id" value="{{ quote_id }}">
+<label>Código interno<input name="code" maxlength="80" required value="{{ editing.code if editing else '' }}"></label>
+<label>Produto / marca / embalagem<input name="description" maxlength="255" required value="{{ editing.description if editing else '' }}" placeholder="Ex.: Arroz, marca, pacote de 5 kg"></label>
+<label>Código de barras (opcional)<input id="barcode" name="barcode" inputmode="numeric" maxlength="14" value="{{ editing.barcode or '' if editing else (q if q.isdigit() else '') }}"></label>
+<button type="button" id="scan-register">Ler código para este cadastro</button>
+<label>Unidade-base<input name="base_unit" maxlength="40" required value="{{ editing.base_unit if editing else 'UN' }}" placeholder="UN, KG, CX"></label>
+<label class="check"><input type="checkbox" name="active" value="1" {% if not editing or editing.active %}checked{% endif %}> Ativo</label>
+<button class="primary">Salvar produto</button>{% if editing %}<a href="/admin/produtos?quote_id={{ quote_id }}#cadastro">Cancelar edição</a>{% endif %}</form></div>
+<div class="card"><h2>Base inicial e importação</h2><p>Carregue 80 itens comuns de supermercado. São descrições genéricas com códigos internos, sem GTIN inventado. Edite o item para informar a marca, a embalagem e o código real. O carregamento pode ser repetido sem duplicar os códigos.</p>
+<form method="post" action="/admin/produtos/base"><button>Carregar base inicial de 80 produtos</button></form>
+<hr><form method="post" action="/admin/produtos/importar" enctype="multipart/form-data" class="stack"><label>Importar catálogo CSV ou XLSX<input type="file" name="file" accept=".csv,.xlsx" required></label><p>Colunas: codigo, produto, unidade, codigo_barras. Formate códigos como texto para preservar zeros. Códigos internos existentes são mantidos; novos códigos de barras devem ser únicos.</p><button>Importar catálogo</button></form></div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+<script src="/static/catalog.js?v=7" defer></script>
+{% endblock %}

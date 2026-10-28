@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pedido - {{ supplier.company_name or supplier.name }}</title>
+  <link rel="stylesheet" href="/static/style.css?v=6">
+</head>
+<body class="print-page">
+<main class="print-container">
+  <div class="print-actions no-print">
+    <button onclick="window.print()">Imprimir / salvar PDF</button>
+    <button onclick="copyOrder()">Copiar texto do pedido</button>
+    <a class="button" href="/admin/cotacoes/{{ quote.id }}/pedidos/{{ supplier.id }}">Voltar</a>
+  </div>
+
+  <section class="print-header">
+    <h1>Pedido de compra</h1>
+    <p><strong>Cotação:</strong> {{ quote.title }}</p>
+    <p><strong>Fornecedor:</strong> {{ supplier.company_name or supplier.name }}</p>
+    <p><strong>Contato:</strong> {{ supplier.name }} · {{ supplier.email }}</p>
+    <p><strong>Gerado em:</strong> {{ generated_at.strftime('%d/%m/%Y %H:%M') }}</p>
+  </section>
+
+  <table class="print-table">
+    <thead><tr><th>Código</th><th>Produto</th><th>Qtd.</th><th>Unid.</th><th>Preço unitário</th><th>Total</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.item.code }}</td>
+        <td>{{ row.item.description }}{% if row.response.brand %}<br><small>Marca: {{ row.response.brand }}</small>{% endif %}</td>
+        <td>{{ row.quantity }}</td>
+        <td>{{ row.response.offered_unit }}</td>
+        <td>R$ {{ '%.4f'|format(row.response.offered_price) }}</td>
+        <td>R$ {{ '%.2f'|format(row.line_total) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">Nenhum item selecionado.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="print-total"><strong>Total: R$ {{ '%.2f'|format(total) }}</strong></div>
+  <p class="muted">As quantidades acima estão na unidade cotada pelo fornecedor. Confira condições de pagamento, frete e prazo antes do envio definitivo.</p>
+
+  <textarea id="order-text" class="copy-order-text no-print" readonly>Pedido de compra - {{ quote.title }}
+Fornecedor: {{ supplier.company_name or supplier.name }}
+{% for row in rows %}
+{{ row.item.code }} - {{ row.item.description }} | Qtd: {{ row.quantity }} {{ row.response.offered_unit }} | Preço: R$ {{ '%.4f'|format(row.response.offered_price) }} | Total: R$ {{ '%.2f'|format(row.line_total) }}{% endfor %}
+Total do pedido: R$ {{ '%.2f'|format(total) }}</textarea>
+</main>
+<script>
+function copyOrder() {
+  const el = document.getElementById('order-text');
+  navigator.clipboard.writeText(el.value).then(function () { alert('Pedido copiado.'); });
+}
+</script>
+</body>
+</html>

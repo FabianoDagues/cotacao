@@ -1,0 +1,3 @@
+Sistema de Cotação V7.1 — 28/10/2026
+Correção de migração para password_reset_tokens.created_by_user_id.
+Mantém catálogo e leitor da V7. Não contém dados de produção.

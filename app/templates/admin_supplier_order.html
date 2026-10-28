@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Fechamento - {{ supplier.company_name or supplier.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Fechamento / pedido</h1>
+    <p class="muted">{{ quote.title }} · {{ supplier.company_name or supplier.name }}</p>
+  </div>
+  <a class="button" href="/admin/cotacoes/{{ quote.id }}">Voltar à cotação</a>
+</div>
+
+{% if saved %}<div class="success"><strong>Fechamento salvo.</strong> As quantidades e os itens selecionados ficaram gravados.</div>{% endif %}
+{% if finalized %}<div class="success"><strong>Pedido marcado como pronto.</strong> Agora você pode abrir a versão para impressão/PDF e enviar ao fornecedor.</div>{% endif %}
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card order-summary-head">
+  <div><strong>Fornecedor:</strong> {{ supplier.company_name or supplier.name }}</div>
+  <div><strong>E-mail:</strong> {{ supplier.email }}</div>
+  <div><strong>Status da cotação:</strong> {% if submission.submitted_at %}<span class="badge open">Enviada</span>{% else %}<span class="badge pending">Pendente</span>{% endif %}</div>
+  <div><strong>Status do pedido:</strong> {% if order and order.status == 'ready' %}<span class="badge open">Pronto</span>{% else %}<span class="badge pending">Rascunho</span>{% endif %}</div>
+</div>
+
+<div class="info"><strong>Como funciona:</strong> por padrão, quando ainda não existe um fechamento salvo, ficam marcados os itens em que este fornecedor tem o menor preço normalizado. Você pode marcar/desmarcar produtos e editar a quantidade a pedir. A quantidade é informada na <strong>unidade cotada pelo fornecedor</strong> (UN, CX, PCT etc.).</div>
+
+<form method="post">
+<div class="card table-wrap">
+<table class="wide order-table">
+  <thead><tr><th>Incluir</th><th>Código</th><th>Produto</th><th>Solicitado</th><th>Fornecedor cotou</th><th>Preço</th><th>Qtd. a pedir</th><th>Equiv. base</th><th>Total</th><th>Preço</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr class="{% if row.is_lowest %}lowest-row{% endif %}">
+      <td><input class="order-check" type="checkbox" name="include_{{ row.item.id }}" value="1" {% if row.selected %}checked{% endif %}></td>
+      <td>{{ row.item.code }}</td>
+      <td><strong>{{ row.item.description }}</strong>{% if row.is_lowest %}<div class="inline-success">Menor preço</div>{% endif %}</td>
+      <td>{{ row.item.requested_qty }} {{ row.item.base_unit }}</td>
+      <td>{{ row.response.offered_unit }} · fator {{ row.response.base_units_per_offered_unit }}</td>
+      <td>R$ {{ '%.4f'|format(row.response.offered_price) }}</td>
+      <td><input class="order-qty" name="qty_{{ row.item.id }}" value="{{ row.quantity }}" inputmode="decimal" data-price="{{ row.response.offered_price }}" data-factor="{{ row.response.base_units_per_offered_unit }}" data-base-unit="{{ row.item.base_unit }}" data-offered-unit="{{ row.response.offered_unit }}"></td>
+      <td class="base-equivalent">{{ row.base_equivalent }} {{ row.item.base_unit }}</td>
+      <td class="line-total">R$ {{ '%.2f'|format(row.line_total) if row.selected else '0,00' }}</td>
+      <td>{% if row.response.normalized_price is not none %}R$ {{ '%.4f'|format(row.response.normalized_price) }} / {{ row.item.base_unit }}{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="10">Este fornecedor ainda não informou preços para esta cotação.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="card order-footer">
+  <div><span class="muted">Total estimado do pedido</span><div class="order-total" id="order-total">R$ {{ '%.2f'|format(total) }}</div></div>
+  <div class="form-actions">
+    <button type="submit" name="action" value="save">Salvar rascunho</button>
+    <button class="primary" type="submit" name="action" value="finalize">Salvar e marcar como pronto</button>
+    {% if order and order.items %}<a class="button" href="/admin/cotacoes/{{ quote.id }}/pedidos/{{ supplier.id }}/imprimir" target="_blank">Abrir pedido para imprimir / PDF</a>{% endif %}
+  </div>
+</div>
+</form>
+
+<script>
+(function () {
+  function parseNumber(v) {
+    v = String(v || '').trim().replace(/\s/g, '');
+    if (v.includes(',') && v.includes('.')) v = v.replace(/\./g, '').replace(',', '.');
+    else v = v.replace(',', '.');
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function update() {
+    let total = 0;
+    document.querySelectorAll('.order-table tbody tr').forEach(function (tr) {
+      const check = tr.querySelector('.order-check');
+      const qty = tr.querySelector('.order-qty');
+      if (!check || !qty) return;
+      const price = parseNumber(qty.dataset.price);
+      const factor = parseNumber(qty.dataset.factor) || 1;
+      const q = parseNumber(qty.value);
+      const included = check.checked;
+      const line = included ? q * price : 0;
+      total += line;
+      const lineCell = tr.querySelector('.line-total');
+      const baseCell = tr.querySelector('.base-equivalent');
+      if (lineCell) lineCell.textContent = 'R$ ' + line.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (baseCell) baseCell.textContent = (q * factor).toLocaleString('pt-BR', {maximumFractionDigits: 4}) + ' ' + qty.dataset.baseUnit;
+    });
+    const totalEl = document.getElementById('order-total');
+    if (totalEl) totalEl.textContent = 'R$ ' + total.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+  document.querySelectorAll('.order-check,.order-qty').forEach(function (el) { el.addEventListener('change', update); el.addEventListener('input', update); });
+  update();
+})();
+</script>
+{% endblock %}
