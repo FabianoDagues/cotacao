@@ -1,0 +1,15 @@
+{% extends 'internal_base.html' %}
+{% block title %}Funcionários · Uso interno{% endblock %}
+{% block internal_content %}
+<div class="page-head"><div><p class="eyebrow">USO INTERNO · ACESSOS</p><h1>Funcionários</h1><p class="muted">Cada pessoa registra as retiradas com seu próprio login.</p></div></div>
+<div class="internal-grid"><section class="card"><h2>{{ 'Editar funcionário' if values.get('id') else 'Novo funcionário' }}</h2><form method="post" class="stack" action="/admin/funcionarios">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="id" value="{{ values.get('id', '') }}">
+<label>Nome<input name="name" value="{{ values.get('name', '') }}" maxlength="120" required></label>
+<label>E-mail de acesso<input name="email" type="email" value="{{ values.get('email', '') }}" maxlength="180" required autocomplete="off"></label>
+<label>{{ 'Nova senha provisória (opcional)' if values.get('id') else 'Senha provisória' }}<input name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" {% if not values.get('id') %}required{% endif %}></label><small class="muted">O funcionário deverá trocar a senha provisória antes da primeira retirada.{% if values.get('id') %} Deixe em branco para manter a senha atual.{% endif %}</small>
+<label class="check"><input type="checkbox" name="active" value="1" {% if values.get('active') %}checked{% endif %}>Acesso ativo</label>
+<button class="primary">Salvar funcionário</button>{% if values.get('id') %}<a href="/admin/funcionarios">Cancelar edição</a>{% endif %}
+</form></section><section class="card"><h2>Equipe cadastrada</h2><div class="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Acesso</th><th></th></tr></thead><tbody>
+{% for employee in employees %}<tr><td>{{ employee.name }}</td><td>{{ employee.email }}</td><td><span class="badge {{ 'open' if employee.active else 'closed' }}">{{ 'Ativo' if employee.active else 'Inativo' }}</span>{% if employee.must_change_password %}<br><small>Troca de senha pendente</small>{% endif %}</td><td><a class="button compact" href="?edit={{ employee.id }}">Editar / redefinir senha</a></td></tr>{% else %}<tr><td colspan="4">Cadastre a equipe para liberar os acessos.</td></tr>{% endfor %}
+</tbody></table></div><p class="muted small-note">Funcionários acessam a tela de retiradas e seu próprio histórico recente. O relatório geral e os cadastros ficam com o administrador.</p></section></div>
+{% endblock %}

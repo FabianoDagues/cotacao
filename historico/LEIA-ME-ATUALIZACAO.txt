@@ -1,0 +1,24 @@
+ATUALIZAÇÃO V6 — ACOMPANHAMENTO E FECHAMENTO DE PEDIDOS
+
+Novidades:
+1. Após o fornecedor clicar em "Salvar minha cotação", aparece uma confirmação de envio.
+2. O administrador vê quem já enviou e quem ainda está pendente em cada cotação.
+3. A listagem principal de cotações mostra o progresso de respostas (ex.: 2/3 enviados ou Todos enviados).
+4. Cada fornecedor da cotação ganhou o botão "Fechamento / pedido".
+5. No fechamento, os itens de menor preço desse fornecedor vêm pré-selecionados na primeira abertura.
+6. É possível marcar/desmarcar produtos e editar a quantidade a pedir na unidade cotada pelo fornecedor.
+7. O fechamento pode ser salvo como rascunho ou marcado como pronto.
+8. Há uma versão limpa do pedido para imprimir/salvar em PDF e um botão para copiar o texto do pedido.
+9. Ao corrigir unidade/fator/preço no mapa comparativo, a página volta exatamente para a linha corrigida.
+
+Banco de dados:
+- A atualização cria automaticamente as tabelas de pedidos.
+- Também adiciona automaticamente o campo de data de envio em quote_suppliers.
+- Não é necessário recriar o PostgreSQL e os dados existentes são preservados.
+
+Instalação no GitHub:
+- Entre em cotacao / sistema_cotacao.
+- Use Add file > Upload files.
+- Envie a pasta app desta atualização para substituir/adicionar os arquivos nos mesmos caminhos.
+- Faça o commit na branch main.
+- O Railway fará o deploy automaticamente.

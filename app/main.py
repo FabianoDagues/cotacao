@@ -136,7 +136,7 @@ def startup():
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "8.0"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -144,6 +144,8 @@ def home(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
     if not user:
         return RedirectResponse("/login", 303)
+    if user.role == "employee":
+        return RedirectResponse("/uso-interno/alterar-senha" if user.must_change_password else "/uso-interno", 303)
     if user.role == "supplier" and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
@@ -162,6 +164,8 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["role"] = user.role
+    if user.role == "employee":
+        return RedirectResponse("/uso-interno/alterar-senha" if user.must_change_password else "/uso-interno", 303)
     if user.role == "supplier" and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
@@ -1002,3 +1006,6 @@ async def supplier_save_quote(quote_id: int, request: Request, db: Session = Dep
 
 from .catalog import router as catalog_router
 app.include_router(catalog_router)
+
+from .internal_use import router as internal_router
+app.include_router(internal_router)

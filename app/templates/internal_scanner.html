@@ -1,0 +1,8 @@
+<div class="camera-controls no-print" data-scanner-target="{{ scan_target }}" {% if scan_submit %}data-scanner-submit="{{ scan_submit }}"{% endif %}>
+<button type="button" class="camera-open">Ler código pela câmera</button>
+<button type="button" class="camera-stop" hidden>Fechar câmera</button>
+<p class="camera-status muted" role="status" aria-live="polite"></p>
+<div id="internal-reader" class="camera-reader"></div>
+</div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+<script src="/static/internal_scanner.js?v=8" defer></script>

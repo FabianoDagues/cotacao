@@ -1,0 +1,23 @@
+{% extends 'internal_base.html' %}
+{% block title %}Registrar retirada · Uso interno{% endblock %}
+{% block internal_content %}
+<div class="withdraw-container">
+<div class="page-head"><div><p class="eyebrow">USO INTERNO DO MERCADO</p><h1>Registrar retirada</h1><p class="muted">{{ user.name }}, leia o produto e informe quanto você vai utilizar.</p></div></div>
+{% if saved %}<div class="success saved-receipt" role="status"><strong>{{ 'Retirada cancelada' if saved.cancelled_at else 'Retirada registrada' }} · #{{ saved.id }}</strong><p>{{ saved.description }} · <strong>{{ qty_text(saved.quantity) }}</strong> unidade(s)</p><small>{{ local_time(saved.created_at).strftime('%d/%m/%Y às %H:%M') }} · {{ saved.sector }}</small></div>{% endif %}
+<section class="card"><h2><span class="step-number">1</span> Identifique o produto</h2>
+<form method="get" action="/uso-interno" class="stack" id="withdraw-search">
+<label>Código de barras<input id="withdraw-barcode" name="barcode" value="{{ barcode }}" maxlength="80" required placeholder="Leia ou digite o código" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text"></label><button type="submit">Buscar produto</button></form>
+{% set scan_target = 'withdraw-barcode' %}{% set scan_submit = 'withdraw-search' %}{% include 'internal_scanner.html' %}
+<p class="muted small-note">Você também pode usar um leitor USB/Bluetooth no campo acima.</p></section>
+{% if product %}<section class="card selected-product" id="selected-product"><h2><span class="step-number">2</span> Confira e registre</h2>
+<p class="product-title">{{ product.description }}</p><div class="product-tags"><span>#{{ product.id }}</span><span>{{ product.sector }}</span><span>{{ product.classification }}</span></div><p class="barcode-text">{{ product.barcode }}</p>
+<form method="post" action="/uso-interno/retiradas" class="stack" id="withdraw-save">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="request_key" value="{{ request_key }}"><input type="hidden" name="product_id" value="{{ product.id }}">
+<label>Quantidade retirada<input id="withdraw-quantity" name="quantity" value="{{ quantity }}" inputmode="decimal" required maxlength="15" aria-describedby="quantity-help"></label>
+<small class="muted" id="quantity-help">Quantidade de embalagens/unidades da descrição. Ex.: 2 frascos = 2. Use vírgula para frações, se necessário.</small>
+<button class="primary large-button" type="submit">Confirmar retirada</button><a href="/uso-interno">Cancelar / ler outro produto</a>
+</form></section>{% endif %}
+<section class="card"><h2>Suas últimas retiradas</h2><ul class="recent-list">{% for row in recent %}<li><div><strong>{{ row.description }}</strong><small>{{ local_time(row.created_at).strftime('%d/%m/%Y %H:%M') }} · {{ row.sector }} · #{{ row.id }}</small>{% if row.cancelled_at %}<span class="badge closed">Cancelada</span>{% endif %}</div><strong class="quantity-chip">{{ qty_text(row.quantity) }}</strong></li>{% else %}<li>Suas retiradas aparecerão aqui depois da confirmação.</li>{% endfor %}</ul></section>
+</div>
+<script src="/static/internal_forms.js?v=8" defer></script>
+{% endblock %}

@@ -1,3 +1,4 @@
-Sistema de Cotação V7.1 — 28/10/2026
-Correção de migração para password_reset_tokens.created_by_user_id.
-Mantém catálogo e leitor da V7. Não contém dados de produção.
+Sistema de Cotação V8.0 — 08/11/2026
+Cadastro simples de uso interno, funcionários, retiradas e relatório.
+Inclui funcionalidades V7 e correção de redefinição de senha.
+Não contém dados do PostgreSQL. Consulte LEIA-ME-V8.md.

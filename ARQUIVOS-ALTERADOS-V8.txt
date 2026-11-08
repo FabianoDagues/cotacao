@@ -1,0 +1,28 @@
+Arquivos novos ou alterados em relação à V7.1
+
+INICIAR_NOVA_CONVERSA.md
+LEIA-ME-V8.md
+README.md
+VERSAO_BACKUP.txt
+app/internal_models.py
+app/internal_use.py
+app/main.py
+app/static/internal.css
+app/static/internal_forms.js
+app/static/internal_scanner.js
+app/templates/base.html
+app/templates/internal_base.html
+app/templates/internal_employees.html
+app/templates/internal_password.html
+app/templates/internal_products.html
+app/templates/internal_report.html
+app/templates/internal_scanner.html
+app/templates/internal_withdraw.html
+historico/LEIA-ME-ATUALIZACAO.txt
+historico/LEIA-ME-CORRECAO-SENHA.md
+historico/LEIA-ME-V7.md
+historico/README_V6.md
+tests/test_internal_frontend.cjs
+tests/test_internal_use.py
+
+Documentação anterior foi organizada em historico/.

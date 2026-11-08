@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block extra_head %}<link rel="stylesheet" href="/static/internal.css?v=8">{% endblock %}
+{% block content %}
+<div class="internal-shell">
+{% if user.role == 'admin' %}
+<nav class="internal-nav no-print" aria-label="Uso interno">
+<a href="/uso-interno" {% if request.url.path == '/uso-interno' %}aria-current="page"{% endif %}>Registrar retirada</a>
+<a href="/admin/uso-interno/produtos" {% if '/produtos' in request.url.path %}aria-current="page"{% endif %}>Produtos de uso interno</a>
+<a href="/admin/funcionarios" {% if '/funcionarios' in request.url.path %}aria-current="page"{% endif %}>Funcionários</a>
+<a href="/admin/uso-interno/relatorio" {% if '/relatorio' in request.url.path %}aria-current="page"{% endif %}>Relatório</a>
+</nav>{% endif %}
+{% if message %}<div class="info no-print" role="status">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+{% block internal_content %}{% endblock %}
+</div>
+{% endblock %}
