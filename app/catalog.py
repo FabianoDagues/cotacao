@@ -51,6 +51,14 @@ def catalog(request: Request, q: str='', quote_id: int=0, edit: int=0, db: Sessi
             barcode=barcode_value(q)
             if barcode: conditions.append(Product.barcode==barcode)
         except ValueError: pass
+        from .importacao import ImportLink
+        from .internal_models import InternalProduct
+        from .internal_use import barcode_key
+        try:
+            linked = select(ImportLink.product_id).join(InternalProduct, InternalProduct.id == ImportLink.internal_id).where(InternalProduct.barcode_key == barcode_key(q))
+            conditions.append(Product.id.in_(linked))
+        except ValueError:
+            pass
         query=query.where(or_(*conditions))
     products=db.scalars(query.order_by(Product.description).limit(201)).all()
     quote=db.get(Quote,quote_id) if quote_id else None

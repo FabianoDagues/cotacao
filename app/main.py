@@ -1009,3 +1009,6 @@ app.include_router(catalog_router)
 
 from .internal_use import router as internal_router
 app.include_router(internal_router)
+
+from .importacao import router as import_router
+app.include_router(import_router)

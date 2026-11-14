@@ -145,7 +145,7 @@ class InternalUseTest(unittest.TestCase):
   self.assertEqual(len(list(csv.reader(io.StringIO(filtered.content.decode('utf-8-sig')),delimiter=';'))),1)
   self.assertEqual(self.client.get('/admin/uso-interno/relatorio',params={'start':'invalid'}).status_code,400)
   self.assertEqual(self.client.get('/admin/uso-interno/relatorio',params={'start':'2026-11-08','end':'2026-11-07'}).status_code,400)
-  data={'csrf_token':self.token('/admin/uso-interno/relatorio'),'reason':'Quantidade incorreta',**params}
+  data={'csrf_token':self.token('/admin/uso-interno/relatorio?start=2026-11-07&end=2026-11-07'),'reason':'Quantidade incorreta',**params}
   for _ in range(2):self.assertEqual(self.client.post(f'/admin/uso-interno/retiradas/{wid}/cancelar',data=data).status_code,200)
   r=self.client.get('/admin/uso-interno/relatorio.csv',params=params)
   rows=list(csv.reader(io.StringIO(r.content.decode('utf-8-sig')),delimiter=';'));self.assertEqual(rows[1][-1],'1,25')
