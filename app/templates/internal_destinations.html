@@ -1,0 +1,11 @@
+{% extends 'internal_base.html' %}
+{% block title %}Setores e destinos{% endblock %}
+{% block internal_content %}
+<h1>Setores e destinos</h1>
+<form method="post" class="card stack">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label>Nome do setor ou destino<input name="name" required maxlength="100" placeholder="Ex.: Hortifruti"></label>
+<button type="submit" class="primary">Cadastrar destino</button>
+</form>
+<section class="card"><h2>Destinos disponíveis</h2><ul>{% for name in destinations %}<li>{{ name }}</li>{% endfor %}</ul></section>
+{% endblock %}

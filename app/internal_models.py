@@ -42,3 +42,9 @@ class InternalWithdrawal(Base):
         CheckConstraint('quantity > 0', name='ck_internal_withdrawal_quantity'),
         Index('ix_internal_withdrawal_date_product', 'created_at', 'product_id'),
     )
+
+
+class InternalDestination(Base):
+    __tablename__ = 'internal_destinations'
+    name_key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))

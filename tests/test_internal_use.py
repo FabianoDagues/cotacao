@@ -58,6 +58,22 @@ class InternalUseTest(unittest.TestCase):
  def withdrawal_form(self,code='7891234567895'):
   r=self.client.get('/uso-interno',params={'barcode':code});self.assertEqual(r.status_code,200,r.text)
   return {key:re.search(r'name="'+key+r'" value="([^"]+)"',r.text).group(1) for key in ('csrf_token','request_key','product_id')}
+ def test_destination_creation_withdrawal_and_report(self):
+  url='/admin/uso-interno/destinos'
+  form={'name':'Hortifruti','csrf_token':self.token(url)}
+  self.assertEqual(self.client.post(url,data=form).status_code,200)
+  self.assertEqual(self.client.post(url,data={**form,'name':' hortifrúti '}).status_code,400)
+  report='/admin/uso-interno/relatorio'
+  self.assertIn('value="Hortifruti"',self.client.get(report).text)
+  self.create_product();self.login('employee')
+  self.assertEqual(self.client.get(url).status_code,403)
+  self.assertIn('value="Hortifruti"',self.client.get('/uso-interno?barcode=7891234567895').text)
+  r=self.client.post('/uso-interno/retiradas',data={**self.withdrawal_form(),'quantity':'2','destination':'Hortifruti'})
+  self.assertIn('Retirada registrada',r.text)
+  self.login()
+  for sector, included in [('Hortifruti',True),('Padaria',False)]:
+   self.assertEqual('Detergente 500 ml' in self.client.get(report,params={'sector':sector}).text,included)
+
  def test_upgrade_and_health(self):
   self.assertIn('internal_withdrawals',inspect(self.engine).get_table_names())
   self.assertEqual(self.client.get('/healthz').json()['version'],'8.0')

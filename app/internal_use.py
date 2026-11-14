@@ -4,6 +4,7 @@ import hmac
 import io
 import re
 import secrets
+import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -16,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .db import get_db
 from .models import User, PasswordResetToken
-from .internal_models import InternalProduct, InternalWithdrawal, utcnow
+from .internal_models import InternalProduct, InternalWithdrawal, InternalDestination, utcnow
 from .security import hash_password, verify_password
 
 router = APIRouter()
@@ -168,6 +169,35 @@ async def save_product(request: Request, db: Session = Depends(get_db)):
 DESTINATIONS = ('Açougue', 'Padaria', 'Mercado')
 
 
+def destination_key(name):
+    return ''.join(c for c in unicodedata.normalize('NFD', name.casefold()) if not unicodedata.combining(c))
+
+
+def destination_names(db):
+    return sorted((*DESTINATIONS, *db.scalars(select(InternalDestination.name))), key=destination_key)
+
+
+@router.api_route('/admin/uso-interno/destinos', methods=['GET', 'POST'])
+async def destinations_page(request: Request, db: Session = Depends(get_db)):
+    user = admin(request, db)
+    error = None
+    if request.method == 'POST':
+        async with request.form() as form:
+            check_csrf(request, form)
+            try:
+                name = clean_text(' '.join(str(form.get('name') or '').split()), 'Nome do destino', 100)
+                key = destination_key(name)
+                if not key or key in {destination_key(n) for n in DESTINATIONS}:
+                    raise ValueError('Informe um nome válido e ainda não cadastrado.')
+                db.add(InternalDestination(name=name, name_key=key))
+                db.commit()
+                return redirect('/admin/uso-interno/destinos', message=f'Destino {name} cadastrado.')
+            except (ValueError, IntegrityError) as exc:
+                db.rollback()
+                error = str(exc) if isinstance(exc, ValueError) else 'Este destino já está cadastrado.'
+    return render(request, 'internal_destinations.html', user, dict(destinations=destination_names(db), error=error), 400 if error else 200)
+
+
 def withdrawal_page(request, db, user, product=None, error=None, status=200, form_key=None, quantity='1', destination=''):
     recent = db.scalars(select(InternalWithdrawal).where(InternalWithdrawal.employee_id == user.id)
                         .order_by(InternalWithdrawal.created_at.desc(), InternalWithdrawal.id.desc()).limit(10)).all()
@@ -176,7 +206,7 @@ def withdrawal_page(request, db, user, product=None, error=None, status=200, for
     if saved_id.isdigit():
         saved = db.scalar(select(InternalWithdrawal).where(InternalWithdrawal.id == int(saved_id), InternalWithdrawal.employee_id == user.id))
     return render(request, 'internal_withdraw.html', user, dict(product=product, recent=recent,
-        saved=saved, error=error, quantity=quantity, destinations=DESTINATIONS, destination=destination, barcode=request.query_params.get('barcode', ''),
+        saved=saved, error=error, quantity=quantity, destinations=destination_names(db), destination=destination, barcode=request.query_params.get('barcode', ''),
         request_key=form_key or secrets.token_hex(32)), status)
 
 
@@ -205,8 +235,8 @@ async def create_withdrawal(request: Request, db: Session = Depends(get_db)):
             product = db.get(InternalProduct, pid)
             if not product: raise ValueError('Produto não encontrado. Leia o código novamente.')
             destination = form.get('destination')
-            if destination not in DESTINATIONS:
-                raise ValueError('Escolha Açougue, Padaria ou Mercado como destino.')
+            if destination not in destination_names(db):
+                raise ValueError('Escolha um destino cadastrado.')
             quantity = parse_quantity(form.get('quantity'))
             existing = db.scalar(select(InternalWithdrawal).where(InternalWithdrawal.request_key == key))
             if existing:
@@ -271,7 +301,8 @@ def report_data(request, db):
 @router.get('/admin/uso-interno/relatorio')
 def report(request: Request, db: Session = Depends(get_db)):
     user = admin(request, db)
-    sectors = db.scalars(select(InternalWithdrawal.sector).distinct().order_by(InternalWithdrawal.sector)).all()
+    historical = db.scalars(select(InternalWithdrawal.sector).distinct())
+    sectors = sorted(set(destination_names(db)).union(historical), key=destination_key)
     try:
         data = report_data(request, db)
     except ValueError as exc:
