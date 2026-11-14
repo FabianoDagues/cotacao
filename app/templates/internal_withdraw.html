@@ -15,11 +15,12 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="request_key" value="{{ request_key }}"><input type="hidden" name="product_id" value="{{ product.id }}">
 <label>Destino da retirada<select name="destination" required><option value="">Selecione o destino</option>{% for name in destinations %}<option value="{{ name }}"{% if destination == name %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
 <h2><span class="step-number">3</span> Informe a quantidade</h2>
-<label>Quantidade retirada<input id="withdraw-quantity" name="quantity" value="{{ quantity }}" inputmode="decimal" required maxlength="15" aria-describedby="quantity-help"></label>
+<label for="withdraw-quantity">Quantidade retirada</label>
+<div style="display:grid;grid-template-columns:48px minmax(0,1fr) 48px;gap:8px"><button type="button" id="qty-minus" aria-label="Diminuir quantidade">−</button><input id="withdraw-quantity" name="quantity" value="{{ quantity }}" inputmode="decimal" required maxlength="15" aria-describedby="quantity-help" pattern="[0-9]{1,10}([.,][0-9]{1,4})?"><button type="button" id="qty-plus" aria-label="Aumentar quantidade">+</button></div>
 <small class="muted" id="quantity-help">Quantidade de embalagens/unidades da descrição. Ex.: 2 frascos = 2. Use vírgula para frações, se necessário.</small>
 <button class="primary large-button" type="submit">Confirmar retirada</button><a href="/uso-interno">Cancelar / ler outro produto</a>
 </form></section>{% endif %}
 <section class="card"><h2>Suas últimas retiradas</h2><ul class="recent-list">{% for row in recent %}<li><div><strong>{{ row.description }}</strong><small>{{ local_time(row.created_at).strftime('%d/%m/%Y %H:%M') }} · {{ row.sector }} · #{{ row.id }}</small>{% if row.cancelled_at %}<span class="badge closed">Cancelada</span>{% endif %}</div><strong class="quantity-chip">{{ qty_text(row.quantity) }}</strong></li>{% else %}<li>Suas retiradas aparecerão aqui depois da confirmação.</li>{% endfor %}</ul></section>
 </div>
-<script src="/static/internal_forms.js?v=8" defer></script>
+<script src="/static/internal_forms.js?v=9" defer></script>
 {% endblock %}
