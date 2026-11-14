@@ -165,7 +165,10 @@ async def save_product(request: Request, db: Session = Depends(get_db)):
             return product_page(request, db, user, values, error, 400)
 
 
-def withdrawal_page(request, db, user, product=None, error=None, status=200, form_key=None, quantity='1'):
+DESTINATIONS = ('Açougue', 'Padaria', 'Mercado')
+
+
+def withdrawal_page(request, db, user, product=None, error=None, status=200, form_key=None, quantity='1', destination=''):
     recent = db.scalars(select(InternalWithdrawal).where(InternalWithdrawal.employee_id == user.id)
                         .order_by(InternalWithdrawal.created_at.desc(), InternalWithdrawal.id.desc()).limit(10)).all()
     saved = None
@@ -173,7 +176,7 @@ def withdrawal_page(request, db, user, product=None, error=None, status=200, for
     if saved_id.isdigit():
         saved = db.scalar(select(InternalWithdrawal).where(InternalWithdrawal.id == int(saved_id), InternalWithdrawal.employee_id == user.id))
     return render(request, 'internal_withdraw.html', user, dict(product=product, recent=recent,
-        saved=saved, error=error, quantity=quantity, barcode=request.query_params.get('barcode', ''),
+        saved=saved, error=error, quantity=quantity, destinations=DESTINATIONS, destination=destination, barcode=request.query_params.get('barcode', ''),
         request_key=form_key or secrets.token_hex(32)), status)
 
 
@@ -201,30 +204,35 @@ async def create_withdrawal(request: Request, db: Session = Depends(get_db)):
             pid = int(form.get('product_id') or 0)
             product = db.get(InternalProduct, pid)
             if not product: raise ValueError('Produto não encontrado. Leia o código novamente.')
+            destination = form.get('destination')
+            if destination not in DESTINATIONS:
+                raise ValueError('Escolha Açougue, Padaria ou Mercado como destino.')
             quantity = parse_quantity(form.get('quantity'))
             existing = db.scalar(select(InternalWithdrawal).where(InternalWithdrawal.request_key == key))
             if existing:
-                if (existing.employee_id, existing.product_id, existing.quantity) != (user.id, pid, quantity):
+                if (existing.employee_id, existing.product_id, existing.quantity, existing.sector) != (user.id, pid, quantity, destination):
                     raise ValueError('Este formulário já foi utilizado. Inicie uma nova retirada.')
                 return redirect('/uso-interno', saved=existing.id)
             withdrawal = InternalWithdrawal(product_id=pid, employee_id=user.id, quantity=quantity,
                 request_key=key, description=product.description, barcode=product.barcode,
-                sector=product.sector, classification=product.classification, employee_name=user.name)
+                sector=destination, classification=product.classification, employee_name=user.name)
             db.add(withdrawal)
             try:
                 db.commit()
             except IntegrityError:
                 db.rollback()
                 existing = db.scalar(select(InternalWithdrawal).where(InternalWithdrawal.request_key == key))
-                if existing and (existing.employee_id, existing.product_id, existing.quantity) == (user.id, pid, quantity):
+                if existing and (existing.employee_id, existing.product_id, existing.quantity, existing.sector) == (user.id, pid, quantity, destination):
                     return redirect('/uso-interno', saved=existing.id)
+                if existing:
+                    raise ValueError('Este formulário já foi utilizado. Inicie uma nova retirada.')
                 raise
             return redirect('/uso-interno', saved=withdrawal.id)
         except (ValueError, InvalidOperation) as exc:
             db.rollback()
             return withdrawal_page(request, db, user, product, str(exc), 400,
                                    key if re.fullmatch('[a-f0-9]{64}', key) else None,
-                                   str(form.get('quantity') or ''))
+                                   str(form.get('quantity') or ''), form.get('destination', ''))
 
 
 def report_data(request, db):
@@ -291,7 +299,7 @@ def report_csv(request: Request, db: Session = Depends(get_db)):
     except ValueError as exc: raise HTTPException(400, str(exc))
     output = io.StringIO(newline='')
     writer = csv.writer(output, delimiter=';')
-    writer.writerow(['Data', 'ID do produto', 'Descrição', 'Código de barras (texto)', 'Setor', 'Classificação', 'Quantidade'])
+    writer.writerow(['Data', 'ID do produto', 'Descrição', 'Código de barras (texto)', 'Setor / destino', 'Classificação', 'Quantidade'])
     for row in data['summary']:
         writer.writerow([row['day'].strftime('%d/%m/%Y'), row['product_id'], csv_text(row['description']),
                          "'" + row['barcode'], csv_text(row['sector']), row['classification'], qty_text(row['quantity'])])

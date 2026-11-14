@@ -83,6 +83,9 @@ class InternalUseTest(unittest.TestCase):
  def test_withdraw_quantity_idempotency_snapshot_and_privacy(self):
   pid=self.create_product();self.login('employee')
   form=self.withdrawal_form()
+  for destination in ['', 'Outro']:
+   self.assertEqual(self.client.post('/uso-interno/retiradas',data={**form,'quantity':'1','destination':destination}).status_code,400)
+  form['destination']='Açougue' 
   for invalid in ['0','-1','NaN','Infinity','1e3','1.234,5','0.00001','10000000000','']:
    r=self.client.post('/uso-interno/retiradas',data={**form,'quantity':invalid})
    self.assertEqual(r.status_code,400,r.text)
@@ -95,7 +98,8 @@ class InternalUseTest(unittest.TestCase):
    self.assertEqual(db.scalar(select(func.count(InternalWithdrawal.id))),1)
    row=db.scalar(select(InternalWithdrawal));self.assertEqual(row.quantity,Decimal('2.5'));wid=row.id
    p=db.get(InternalProduct,pid);p.description='Mudou';p.sector='Padaria';p.classification='Insumo';db.commit()
-   self.assertEqual(row.description,'Detergente 500 ml');self.assertEqual(row.sector,'Loja')
+   self.assertEqual(row.description,'Detergente 500 ml');self.assertEqual(row.sector,'Açougue')
+  self.assertEqual(self.client.post('/uso-interno/retiradas',data={**form,'quantity':'2,5','destination':'Padaria'}).status_code,400)
   self.login('other')
   self.assertNotIn('Retirada registrada',self.client.get(f'/uso-interno?saved={wid}').text)
   self.assertNotIn('Detergente 500 ml',self.client.get('/uso-interno').text)
