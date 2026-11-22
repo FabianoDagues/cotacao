@@ -475,7 +475,14 @@ def cash_transaction_delete(tx_id: int, request: Request, db: Session = Depends(
 def cash_groups_page(request: Request, db: Session = Depends(get_db)):
     user = require_admin(request, db)
     groups = db.scalars(select(CashGroup).order_by(CashGroup.nature, CashGroup.name)).all()
-    return templates.TemplateResponse(request, "cash_groups.html", {"user": user, "groups": groups, "error": None})
+    group_map = {group.id: group for group in groups}
+    children = defaultdict(list)
+    for group in groups:
+        group.display_path = account_path(group, group_map)
+        children[group.parent_id if group.parent_id in group_map else None].append(group)
+    groups.sort(key=lambda group: group.display_path.casefold())
+    return templates.TemplateResponse(request, "cash_groups.html", {
+        "user": user, "groups": groups, "children": children, "error": None})
 
 
 @router.post("/admin/financeiro/grupos")

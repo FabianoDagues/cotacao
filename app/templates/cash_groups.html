@@ -1,5 +1,37 @@
-{% extends "base.html" %}{% block title %}Grupos de contas{% endblock %}{% block content %}
-<div class="page-head"><div><h1>Grupos de contas</h1><p class="muted">Organize grupos, subgrupos e contas detalhadas. Exemplo: Despesas operacionais → Logística → Combustível.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
-<div class="grid two"><form method="post" class="card stack"><h2>Novo grupo</h2><label>Nome<input name="name" required maxlength="160"></label><label>Natureza<select name="nature"><option value="income">Entrada</option><option value="expense">Saída</option><option value="transfer">Transferência</option></select></label><label>Dentro de qual grupo? (opcional)<select name="parent_id"><option value="">Nenhum — criar grupo principal</option>{% for g in groups if g.active %}<option value="{{g.id}}">{{g.display_path}}</option>{% endfor %}</select></label><button class="primary">Adicionar grupo</button></form>
-<div class="card"><h2>Grupos cadastrados</h2><div class="table-wrap"><table><thead><tr><th>Grupo</th><th>Natureza</th><th>Status</th><th></th></tr></thead><tbody>{% for g in groups %}<tr><td><strong>{{g.display_path}}</strong>{% if g.parent_id %}<div class="muted">Subgrupo</div>{% endif %}</td><td>{{'Entrada' if g.nature=='income' else ('Saída' if g.nature=='expense' else 'Transferência')}}</td><td>{{'Ativo' if g.active else 'Inativo'}}</td><td><form method="post" action="/admin/financeiro/grupos/{{g.id}}/status"><button class="compact">{{'Desativar' if g.active else 'Ativar'}}</button></form></td></tr>{% endfor %}</tbody></table></div></div></div>
+{% extends "base.html" %}
+{% block title %}Plano de contas{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/account_groups.css?v=1">{% endblock %}
+{% macro nodes(parent) %}
+{% for g in children.get(parent, []) %}
+<li class="account-node" data-path="{{ g.display_path }}" data-nature="{{ g.nature }}">
+{% if children.get(g.id) %}
+<details><summary><strong>{{ g.name }}</strong><span class="account-kind">{{ {'income':'Entrada','expense':'Saída','transfer':'Transferência'}[g.nature] }}</span>{% if not g.active %}<span class="muted">Inativo</span>{% endif %}</summary>
+<div class="account-actions">
+{% if g.active %}<button type="button" class="add-child" data-id="{{ g.id }}" data-nature="{{ g.nature }}">+ Subconta</button>{% endif %}
+<form method="post" action="/admin/financeiro/grupos/{{g.id}}/status"><button>{{ 'Desativar' if g.active else 'Ativar' }}</button></form>
+</div><ul>{{ nodes(g.id) }}</ul></details>
+{% else %}
+<div class="account-leaf"><span>{{ g.name }}</span><span class="account-kind">{{ {'income':'Entrada','expense':'Saída','transfer':'Transferência'}[g.nature] }}</span>{% if not g.active %}<span class="muted">Inativo</span>{% endif %}</div>
+<div class="account-actions">{% if g.active %}<button type="button" class="add-child" data-id="{{ g.id }}" data-nature="{{ g.nature }}">+ Subconta</button>{% endif %}<form method="post" action="/admin/financeiro/grupos/{{g.id}}/status"><button>{{ 'Desativar' if g.active else 'Ativar' }}</button></form></div>
+{% endif %}
+</li>{% endfor %}
+{% endmacro %}
+{% block content %}
+<div class="page-head"><div><h1>Plano de contas</h1><p class="muted">Abra um grupo para ver suas subcontas.</p></div><a class="button" href="/admin/financeiro">Voltar ao fluxo de caixa</a></div>
+<div class="accounts-layout">
+<form method="post" class="card account-create" id="account-create">
+<h2>Nova conta ou grupo</h2>
+<label>Nome<input id="account-name" name="name" required maxlength="160" placeholder="Ex.: Combustível"></label>
+<label>Natureza<select id="account-nature" name="nature"><option value="expense">Saída</option><option value="income">Entrada</option><option value="transfer">Transferência</option></select></label>
+<label>Dentro de qual grupo?<select id="account-parent" name="parent_id"><option value="">Nenhum — grupo principal</option>{% for g in groups if g.active %}<option value="{{ g.id }}" data-nature="{{ g.nature }}">{{ g.display_path }}</option>{% endfor %}</select></label>
+<button class="primary">Cadastrar</button>
+</form>
+<section class="card account-list">
+<h2>Contas cadastradas</h2>
+<div class="account-tools"><label>Buscar conta<input type="search" id="account-search" placeholder="Nome do grupo ou subconta"></label><button type="button" id="expand-accounts">Expandir todos</button><button type="button" id="collapse-accounts">Recolher todos</button></div>
+<p id="account-empty" hidden>Nenhuma conta encontrada.</p>
+<ul class="account-tree">{{ nodes(None) }}</ul>
+</section>
+</div>
+<script src="/static/account_groups.js?v=1" defer></script>
 {% endblock %}

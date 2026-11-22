@@ -1,0 +1,10 @@
+.accounts-layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:20px;align-items:start}
+.account-create{display:grid;gap:16px;align-content:start;position:sticky;top:16px}
+.account-create h2,.account-list h2{margin:0 0 8px}.account-list{min-width:0}
+.account-tools{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-bottom:18px}.account-tools label{flex:1;min-width:180px}
+.account-tree,.account-node ul{list-style:none;margin:0;padding:0}.account-node ul{margin:8px 0 0 16px;border-left:2px solid #dce5f2;padding-left:12px}
+.account-node{padding:12px 0;border-top:1px solid #e5e7eb}.account-node summary{cursor:pointer;padding:8px;background:#f7f9fc;border-radius:6px;overflow-wrap:anywhere}
+.account-leaf{display:flex;gap:12px;align-items:center;flex-wrap:wrap;overflow-wrap:anywhere}
+.account-kind{font-size:12px;color:#64748b;margin-left:12px}.account-actions{display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap}.account-actions form{margin:0}.account-actions button{font-size:12px;padding:6px 10px}
+.account-node[hidden]{display:none}
+@media(max-width:800px){.accounts-layout{grid-template-columns:1fr}.account-create{position:static}.account-node ul{margin-left:6px;padding-left:8px}}
