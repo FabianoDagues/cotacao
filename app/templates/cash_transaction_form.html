@@ -1,7 +1,8 @@
 {% extends "base.html" %}{% block title %}Lançamento financeiro{% endblock %}{% block content %}
-<div class="page-head"><div><h1>{{'Editar' if tx else 'Novo'}} lançamento</h1><p class="muted">Entradas, saídas e transferências entre contas.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
+<div class="page-head"><div><h1>{{'Editar' if tx else 'Novo'}} lançamento</h1><p class="muted">Entradas, saídas e transferências entre contas.</p></div><a class="button" href="{{return_url if tx else '/admin/financeiro'}}">Voltar</a></div>
 {% if error %}<div class="alert">{{error}}</div>{% endif %}
 <form method="post" class="card stack narrow-form">
+{% if tx %}<input type="hidden" name="return_query" value="{{return_query}}">{% endif %}
 <label>Data<input type="date" name="transaction_date" value="{{tx.transaction_date.isoformat() if tx else today.isoformat()}}" required></label>
 <label>Tipo<select name="transaction_type" id="tx-type" required><option value="income" {% if tx and tx.transaction_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if tx and tx.transaction_type=='expense' %}selected{% endif %}>Saída</option>{% if not tx %}<option value="transfer">Transferência entre contas</option>{% endif %}</select></label>
 <label>Conta de origem / conta do lançamento<select name="account_id" required>{% for a in accounts if a.active %}<option value="{{a.id}}" {% if tx and tx.account_id==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select></label>
@@ -13,7 +14,7 @@
 <label>Documento<input name="document_number" value="{{tx.document_number or '' if tx else ''}}"></label>
 <label>Observações<textarea name="notes">{{tx.notes or '' if tx else ''}}</textarea></label>
 {% if tx %}<label class="check"><input type="checkbox" name="reconciled" value="1" {% if tx.reconciled %}checked{% endif %}> Lançamento conciliado/conferido</label>{% endif %}
-<div class="form-actions"><button class="primary">Salvar</button><a class="button" href="/admin/financeiro">Cancelar</a></div>
+<div class="form-actions"><button class="primary">Salvar</button><a class="button" href="{{return_url if tx else '/admin/financeiro'}}">Cancelar</a></div>
 </form>
 <script>const t=document.getElementById('tx-type'),d=document.getElementById('destination-row'),g=document.getElementById('group-row');function sync(){const is=t.value==='transfer';d.style.display=is?'block':'none';g.style.display=is?'none':'grid'}t.addEventListener('change',sync);sync();</script>
 {% endblock %}

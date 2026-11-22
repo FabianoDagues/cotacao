@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, HTTPException
@@ -226,6 +227,44 @@ def filtered_transactions(db: Session, start: date, end: date, account_id: Optio
     return db.scalars(q.order_by(CashTransaction.transaction_date.desc(), CashTransaction.id.desc())).all()
 
 
+
+def transaction_return_url(tx: CashTransaction, return_query: str = "", message: str = "", db: Optional[Session] = None) -> str:
+    """Retorna ao lançamento, respeitando os filtros que ainda o incluem."""
+    query = parse_qs((return_query or "").lstrip("?"), keep_blank_values=False)
+
+    def field(name: str) -> str:
+        return query.get(name, [""])[0]
+
+    day = tx.transaction_date
+    start = parse_date_value(field("inicio")) or day.replace(day=1)
+    end = parse_date_value(field("fim")) or day
+    if start > end:
+        start, end = day.replace(day=1), day
+    # Se a data mudou na edição, o lançamento não deve sumir do período filtrado.
+    start, end = min(start, day), max(end, day)
+    params = {"inicio": start.isoformat(), "fim": end.isoformat()}
+
+    if field("conta").isdigit() and int(field("conta")) == tx.account_id:
+        params["conta"] = str(tx.account_id)
+
+    if field("grupo").isdigit() and tx.group_id:
+        selected_group = int(field("grupo"))
+        if selected_group == tx.group_id:
+            params["grupo"] = str(selected_group)
+        elif db is not None:
+            groups = {g.id: g for g in db.scalars(select(CashGroup)).all()}
+            if tx.group_id in descendant_ids(selected_group, groups):
+                params["grupo"] = str(selected_group)
+
+    selected_type = field("tipo")
+    if selected_type == tx.transaction_type or (selected_type == "transfer" and tx.transaction_type in {"transfer_in", "transfer_out"}):
+        params["tipo"] = selected_type
+
+    if message:
+        params["msg"] = message
+    return f"/admin/financeiro?{urlencode(params)}#lancamento-{tx.id}"
+
+
 def summarize_transactions(transactions):
     entries = Decimal("0")
     expenses = Decimal("0")
@@ -311,6 +350,10 @@ def cashflow_page(
         "selected_account": conta,
         "selected_group": grupo,
         "selected_type": tipo or "",
+        "return_query": urlencode({k: v for k, v in {
+            "inicio": start.isoformat(), "fim": end.isoformat(),
+            "conta": conta, "grupo": grupo, "tipo": tipo,
+        }.items() if v is not None and v != ""}),
         "message": request.query_params.get("msg"),
     })
 
@@ -416,7 +459,13 @@ def cash_transaction_edit_page(tx_id: int, request: Request, db: Session = Depen
     if tx.transfer_ref:
         raise HTTPException(400, "Transferências devem ser excluídas e lançadas novamente.")
     accounts, groups, _, _, _ = finance_context(db)
-    return templates.TemplateResponse(request, "cash_transaction_form.html", {"user": user, "accounts": accounts, "groups": groups, "tx": tx, "today": now_local().date(), "error": None})
+    return_query = request.url.query
+    return templates.TemplateResponse(request, "cash_transaction_form.html", {
+        "user": user, "accounts": accounts, "groups": groups, "tx": tx,
+        "today": now_local().date(), "error": None,
+        "return_query": return_query,
+        "return_url": transaction_return_url(tx, return_query, db=db),
+    })
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/editar")
@@ -425,7 +474,7 @@ def cash_transaction_edit(
     transaction_date: str = Form(...), transaction_type: str = Form(...), account_id: int = Form(...),
     group_id: Optional[int] = Form(None), description: str = Form(...), amount: str = Form(...),
     counterparty: str = Form(""), document_number: str = Form(""), notes: str = Form(""), reconciled: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
+    return_query: str = Form(""), db: Session = Depends(get_db),
 ):
     require_admin(request, db)
     tx = db.get(CashTransaction, tx_id)
@@ -440,11 +489,14 @@ def cash_transaction_edit(
     tx.description=description.strip(); tx.amount=value; tx.counterparty=counterparty.strip() or None
     tx.document_number=document_number.strip() or None; tx.notes=notes.strip() or None; tx.reconciled=reconciled == "1"
     db.commit()
-    return RedirectResponse("/admin/financeiro?msg=Lançamento alterado", 303)
+    return RedirectResponse(transaction_return_url(tx, return_query, "Lançamento alterado", db), 303)
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/classificar")
-def cash_transaction_classify(tx_id: int, request: Request, group_id: int = Form(...), db: Session = Depends(get_db)):
+def cash_transaction_classify(
+    tx_id: int, request: Request, group_id: int = Form(...),
+    return_query: str = Form(""), db: Session = Depends(get_db),
+):
     require_admin(request, db)
     tx = db.get(CashTransaction, tx_id); group = db.get(CashGroup, group_id)
     if not tx or not group:
@@ -454,7 +506,7 @@ def cash_transaction_classify(tx_id: int, request: Request, group_id: int = Form
         raise HTTPException(400, "Grupo incompatível com o lançamento")
     tx.group_id = group.id; tx.reconciled = True
     db.commit()
-    return RedirectResponse("/admin/financeiro?msg=Lançamento classificado", 303)
+    return RedirectResponse(transaction_return_url(tx, return_query, "Lançamento classificado", db), 303)
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/excluir")

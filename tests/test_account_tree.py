@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from test_internal_use import InternalUseTest
 from app.models import CashGroup, CashTransaction, FinancialAccount
+from app.finance import now_local
 
 class AccountTreeTest(InternalUseTest):
  def test_nested_creation_filter_and_subtotals(self):
@@ -16,7 +17,7 @@ class AccountTreeTest(InternalUseTest):
   self.assertEqual(self.client.post(url,data={'name':'Inválido','nature':'income','parent_id':lid}).status_code,400)
   with self.sessions() as db:
    leaf=db.scalar(select(CashGroup).where(CashGroup.name=='Pedágios'))
-   db.add(CashTransaction(account_id=aid,transaction_date=date.today(),description='Pedágio teste',group_id=leaf.id,transaction_type='expense',amount=Decimal('35')))
+   db.add(CashTransaction(account_id=aid,transaction_date=now_local().date(),description='Pedágio teste',group_id=leaf.id,transaction_type='expense',amount=Decimal('35')))
    db.commit()
   self.assertIn('Pedágio teste', self.client.get('/admin/financeiro',params={'grupo':oid}).text)
   report=self.client.get('/admin/financeiro/sintetico')
