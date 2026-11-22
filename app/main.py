@@ -1016,3 +1016,6 @@ app.include_router(import_router)
 
 from .finance import router as finance_router, seed_finance_defaults
 app.include_router(finance_router)
+
+from .finance_reports import router as finance_reports_router
+app.include_router(finance_reports_router)

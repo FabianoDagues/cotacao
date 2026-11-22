@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Recebimentos diários{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Recebimentos diários</h1><a class="button" href="/admin/financeiro">Fluxo de caixa</a></div>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+{% if saved %}<p class="success" role="status">Totais do dia salvos.</p>{% endif %}
+<form method="get" class="card stack">
+<label>Data<input type="date" name="day" value="{{ day.isoformat() }}" required></label>
+<label>Conta que recebeu os valores<select name="account_id" required><option value="">Selecione</option>{% for a in accounts %}<option value="{{ a.id }}" {% if a.id == account_id %}selected{% endif %}>{{ a.name }}</option>{% endfor %}</select></label>
+<button>Carregar dia</button></form>
+{% if account_id %}
+<form method="post" class="card stack">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="day" value="{{ day.isoformat() }}"><input type="hidden" name="account_id" value="{{ account_id }}">
+<p>Informe o total recebido em {{ day.strftime('%d/%m/%Y') }} para cada modalidade. Ao salvar novamente, os valores deste formulário são atualizados. Zero remove o total daquela modalidade.</p>
+<p>Se os mesmos recebimentos já vieram do extrato, classifique-os nos grupos correspondentes. Somar os dois lançamentos duplicaria a receita.</p>
+{% for key, name in channels %}<label>{{ name }} (R$)<input name="{{ key }}" inputmode="decimal" value="{{ values[key] }}" required pattern="[0-9]{1,12}([.,][0-9]{1,2})?"></label>{% endfor %}
+<button class="primary">Salvar totais do dia</button>
+</form>{% endif %}
+{% endblock %}

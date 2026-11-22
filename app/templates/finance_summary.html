@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}Relatório sintético{% endblock %}
+{% block content %}
+<style>@media print{.topbar,.summary-actions{display:none!important}.card{box-shadow:none}.container{max-width:none}th,td{font-size:11px}}</style>
+<div class="page-head"><h1>Relatório sintético por grupo</h1><a class="button summary-actions" href="/admin/financeiro">Fluxo de caixa</a></div>
+<form method="get" class="card form-row summary-actions">
+<label>Início<input type="date" name="inicio" value="{{ start.isoformat() }}" required></label>
+<label>Fim<input type="date" name="fim" value="{{ end.isoformat() }}" required></label>
+<label>Conta<select name="conta"><option value="">Todas</option>{% for a in accounts %}<option value="{{ a.id }}"{% if account_id == a.id %} selected{% endif %}>{{ a.name }}</option>{% endfor %}</select></label>
+<div><button class="primary">Filtrar</button> <button type="button" onclick="window.print()">Imprimir / salvar PDF</button></div>
+</form>
+<p>{{ start.strftime('%d/%m/%Y') }} a {{ end.strftime('%d/%m/%Y') }} · {% if account_id %}{% for a in accounts if a.id == account_id %}{{ a.name }}{% endfor %}{% else %}Todas as contas{% endif %}</p>
+<p>Os grupos superiores incluem os valores de todas as suas subcontas. O total geral considera cada lançamento uma única vez.</p>
+<div class="card table-wrap"><table><thead><tr><th>Grupo / subgrupo / conta</th><th class="money">Entradas (R$)</th><th class="money">Saídas (R$)</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.name }}</td><td class="money">{{ '%.2f'|format(row.income)|replace('.', ',') }}</td><td class="money">{{ '%.2f'|format(row.expense)|replace('.', ',') }}</td></tr>{% endfor %}
+</tbody><tfoot><tr><th colspan="1">Total</th><th class="money">{{ '%.2f'|format(income)|replace('.', ',') }}</th><th class="money">{{ '%.2f'|format(expense)|replace('.', ',') }}</th></tr></tfoot></table>
+<p><strong>Resultado do período R$ {{ '%.2f'|format(result)|replace('.', ',') }}</strong></p>
+</div>
+<p>Transferências entre contas · Entradas R$ {{ '%.2f'|format(transfers.transfer_in)|replace('.', ',') }} · Saídas R$ {{ '%.2f'|format(transfers.transfer_out)|replace('.', ',') }}.</p>
+<p class="muted">O resultado considera receitas e despesas. A modalidade de cartão depende da classificação do lançamento; recebimentos sem modalidade identificada aparecem no grupo original para revisão.</p>
+{% endblock %}
