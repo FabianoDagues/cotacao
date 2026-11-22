@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
-from sqlalchemy import String, Integer, DateTime, Numeric, Text, ForeignKey, UniqueConstraint, Boolean
+from sqlalchemy import String, Integer, DateTime, Date, Numeric, Text, ForeignKey, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -106,11 +106,61 @@ class PurchaseOrderItem(Base):
     __table_args__ = (UniqueConstraint("order_id", "quote_item_id", name="uq_order_quote_item"),)
 
 
-class Product(Base):
-    __tablename__ = "products"
+class CashGroup(Base):
+    __tablename__ = "cash_groups"
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    barcode: Mapped[str | None] = mapped_column(String(14), unique=True, nullable=True, index=True)
-    description: Mapped[str] = mapped_column(String(255), index=True)
-    base_unit: Mapped[str] = mapped_column(String(40), default="UN")
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    nature: Mapped[str] = mapped_column(String(20), default="expense")  # income | expense | transfer
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("cash_groups.id", ondelete="SET NULL"), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class FinancialAccount(Base):
+    __tablename__ = "financial_accounts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    account_type: Mapped[str] = mapped_column(String(20), default="bank")  # bank | cash
+    bank_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    agency: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    account_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    opening_balance: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    last_statement_balance: Mapped[Decimal | None] = mapped_column(Numeric(16, 2), nullable=True)
+    last_statement_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BankStatementImport(Base):
+    __tablename__ = "bank_statement_imports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    financial_account_id: Mapped[int] = mapped_column(ForeignKey("financial_accounts.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    imported_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rows_count: Mapped[int] = mapped_column(Integer, default=0)
+    detected_bank: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    __table_args__ = (UniqueConstraint("financial_account_id", "file_hash", name="uq_statement_account_file"),)
+
+
+class CashTransaction(Base):
+    __tablename__ = "cash_transactions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    transaction_date: Mapped[date] = mapped_column(Date, index=True)
+    description: Mapped[str] = mapped_column(String(255))
+    transaction_type: Mapped[str] = mapped_column(String(30), index=True)  # income | expense | transfer_in | transfer_out
+    amount: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    account_id: Mapped[int] = mapped_column(ForeignKey("financial_accounts.id", ondelete="RESTRICT"), index=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("cash_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    counterparty: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    document_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default="manual")  # manual | bank_import | transfer
+    bank_import_id: Mapped[int | None] = mapped_column(ForeignKey("bank_statement_imports.id", ondelete="SET NULL"), nullable=True, index=True)
+    import_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    transfer_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    reconciled: Mapped[bool] = mapped_column(Boolean, default=False)
+    raw_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
