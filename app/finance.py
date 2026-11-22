@@ -125,7 +125,7 @@ def total_balance_before(db: Session, before_date: date) -> Decimal:
     return total
 
 
-def seed_finance_defaults():
+def seed_finance_defaults(session_factory=SessionLocal):
     defaults = [
         ("Receitas", "income", None),
         ("Dinheiro", "income", "Receitas"),
@@ -168,7 +168,7 @@ def seed_finance_defaults():
         ("A classificar - Receitas", "income", None),
         ("A classificar - Despesas", "expense", None),
     ]
-    with SessionLocal() as db:
+    with session_factory() as db:
         existing = {g.name: g for g in db.scalars(select(CashGroup)).all()}
         for name, nature, parent_name in defaults:
             if name in existing:

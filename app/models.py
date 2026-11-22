@@ -106,6 +106,16 @@ class PurchaseOrderItem(Base):
     __table_args__ = (UniqueConstraint("order_id", "quote_item_id", name="uq_order_quote_item"),)
 
 
+class Product(Base):
+    __tablename__ = "products"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    barcode: Mapped[str | None] = mapped_column(String(14), unique=True, nullable=True, index=True)
+    description: Mapped[str] = mapped_column(String(255), index=True)
+    base_unit: Mapped[str] = mapped_column(String(40), default="UN")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class CashGroup(Base):
     __tablename__ = "cash_groups"
     id: Mapped[int] = mapped_column(primary_key=True)

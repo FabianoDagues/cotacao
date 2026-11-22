@@ -9,6 +9,7 @@
   <a class="button" href="/admin/cotacoes/{{ quote.id }}/excel">Exportar Excel</a>
 </div>
 
+<div class="card"><a class="button primary" href="/admin/produtos?quote_id={{ quote.id }}">Adicionar produtos / Ler código de barras</a></div>
 {% if supplier_added %}<div class="success">Fornecedor acrescentado à cotação. Ele já poderá visualizar esta cotação ao entrar no sistema.</div>{% endif %}
 {% if supplier_already_added %}<div class="info">Esse fornecedor já participa desta cotação.</div>{% endif %}
 
