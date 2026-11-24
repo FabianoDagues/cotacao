@@ -1,75 +1,154 @@
 {% extends "base.html" %}
 {% block title %}Fluxo de Caixa{% endblock %}
 {% block content %}
-<div class="page-head">
-  <div><h1>Fluxo de caixa</h1><p class="muted">Bancos + caixa físico, lançamentos, transferências, grupos/subgrupos e conciliação.</p></div>
-  <div class="action-row">
-    <a class="button primary" href="/admin/financeiro/lancamentos/novo">+ Novo lançamento</a>
-    <a class="button" href="/admin/financeiro/lancamentos/novo?tipo=transfer">↔ Nova transferência</a>
-    <a class="button" href="/admin/financeiro/importar">Importar extrato</a>
-    <a class="button" href="/admin/financeiro/contas">Contas financeiras</a>
-    <a class="button" href="/admin/financeiro/grupos">Grupos e subgrupos</a>
+<div class="finance-desktop">
+  <div class="finance-titlebar">
+    <div>
+      <h1>Fluxo de caixa</h1>
+      <p class="muted">Controle de bancos, caixa físico, lançamentos, transferências e conciliação.</p>
+    </div>
+    <div class="finance-toolbar">
+      <a class="button primary" href="/admin/financeiro/lancamentos/novo">+ Novo lançamento</a>
+      <a class="button" href="/admin/financeiro/lancamentos/novo?tipo=transfer">↔ Transferência</a>
+      <a class="button" href="/admin/financeiro/importar">Importar extrato</a>
+      <a class="button" href="/admin/financeiro/contas">Contas</a>
+      <a class="button" href="/admin/financeiro/grupos">Plano de contas</a>
+    </div>
   </div>
-</div>
-{% if message %}<div class="success">{{ message }}</div>{% endif %}
 
-<div class="kpi-grid finance-kpis">
-  <div class="kpi-card"><span>Saldo bancário</span><strong>R$ {{ '%.2f'|format(bank_total)|replace('.', ',') }}</strong></div>
-  <div class="kpi-card"><span>Caixa físico</span><strong>R$ {{ '%.2f'|format(cash_total)|replace('.', ',') }}</strong></div>
-  <div class="kpi-card highlight"><span>Saldo consolidado</span><strong>R$ {{ '%.2f'|format(consolidated)|replace('.', ',') }}</strong></div>
-  <div class="kpi-card income"><span>Entradas no período</span><strong>R$ {{ '%.2f'|format(entries)|replace('.', ',') }}</strong></div>
-  <div class="kpi-card expense"><span>Saídas no período</span><strong>R$ {{ '%.2f'|format(expenses)|replace('.', ',') }}</strong></div>
-  <div class="kpi-card"><span>Resultado do período</span><strong class="{{ 'positive' if result >= 0 else 'negative' }}">R$ {{ '%.2f'|format(result)|replace('.', ',') }}</strong></div>
-</div>
+  {% if message %}<div class="success">{{ message }}</div>{% endif %}
 
-<div class="card">
-  <div class="action-row" style="margin-bottom:12px">
-    <a class="button compact" href="/admin/financeiro?inicio={{today.isoformat()}}&fim={{today.isoformat()}}">Hoje</a>
-    <a class="button compact" href="/admin/financeiro?inicio={{last7.isoformat()}}&fim={{today.isoformat()}}">Últimos 7 dias</a>
-    <a class="button compact" href="/admin/financeiro?inicio={{month_start.isoformat()}}&fim={{today.isoformat()}}">Mês atual</a>
+  <section class="finance-filter-box">
+    <div class="finance-box-title">
+      <div><strong>Filtros</strong><span class="muted">Selecione o período e refine os lançamentos.</span></div>
+      <div class="finance-quick-periods">
+        <a class="button compact" href="/admin/financeiro?inicio={{today.isoformat()}}&fim={{today.isoformat()}}">Hoje</a>
+        <a class="button compact" href="/admin/financeiro?inicio={{last7.isoformat()}}&fim={{today.isoformat()}}">7 dias</a>
+        <a class="button compact" href="/admin/financeiro?inicio={{month_start.isoformat()}}&fim={{today.isoformat()}}">Mês atual</a>
+      </div>
+    </div>
+    <form method="get" class="desktop-filter-grid" id="cash-filter">
+      <label>Data inicial<input type="date" name="inicio" value="{{ start.isoformat() }}"></label>
+      <label>Data final<input type="date" name="fim" value="{{ end.isoformat() }}"></label>
+      <label>Conta
+        <select name="conta"><option value="">Todas as contas</option>{% for a in accounts %}<option value="{{a.id}}" {% if selected_account==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select>
+      </label>
+      <label>Categoria
+        <select name="categoria"><option value="">Todas as categorias</option>{% for p in parent_groups if p.active and p.nature!='transfer' %}<option value="g:{{p.id}}" {% if selected_category=='g:' ~ p.id %}selected{% endif %}>{{p.name}} — todos</option>{% for g in groups if g.active and g.parent_id==p.id %}<option value="s:{{g.id}}" {% if selected_category=='s:' ~ g.id %}selected{% endif %}>&nbsp;&nbsp;↳ {{g.name}}</option>{% endfor %}{% endfor %}</select>
+      </label>
+      <label>Tipo
+        <select name="tipo"><option value="">Todos</option><option value="income" {% if selected_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if selected_type=='expense' %}selected{% endif %}>Saída</option><option value="transfer" {% if selected_type=='transfer' %}selected{% endif %}>Transferência</option></select>
+      </label>
+      <div class="desktop-filter-actions">
+        <button class="primary" type="submit">Filtrar</button>
+        <a class="button" href="/admin/financeiro">Limpar</a>
+        <a class="button" href="/admin/financeiro/imprimir?inicio={{start.isoformat()}}&fim={{end.isoformat()}}{% if selected_account %}&conta={{selected_account}}{% endif %}{% if selected_category %}&categoria={{selected_category}}{% endif %}{% if selected_type %}&tipo={{selected_type}}{% endif %}">Imprimir</a>
+      </div>
+    </form>
+  </section>
+
+  <div class="finance-summary-strip">
+    <div class="finance-summary-card"><span>Saldo bancário</span><strong>R$ {{ '%.2f'|format(bank_total)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card"><span>Caixa físico</span><strong>R$ {{ '%.2f'|format(cash_total)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card accent"><span>Saldo consolidado</span><strong>R$ {{ '%.2f'|format(consolidated)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card income"><span>Entradas</span><strong>R$ {{ '%.2f'|format(entries)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card expense"><span>Saídas</span><strong>R$ {{ '%.2f'|format(expenses)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card"><span>Resultado</span><strong class="{{ 'positive' if result >= 0 else 'negative' }}">R$ {{ '%.2f'|format(result)|replace('.', ',') }}</strong></div>
   </div>
-  <form method="get" class="filter-grid" id="cash-filter">
-    <label>Data inicial do lançamento<input type="date" name="inicio" value="{{ start.isoformat() }}"></label>
-    <label>Data final do lançamento<input type="date" name="fim" value="{{ end.isoformat() }}"></label>
-    <label>Conta<select name="conta"><option value="">Todas</option>{% for a in accounts %}<option value="{{a.id}}" {% if selected_account==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select></label>
-    <label>Categoria<select name="categoria"><option value="">Todas</option>{% for p in parent_groups if p.active and p.nature!='transfer' %}<option value="g:{{p.id}}" {% if selected_category=='g:' ~ p.id %}selected{% endif %}>{{p.name}} — todos</option>{% for g in groups if g.active and g.parent_id==p.id %}<option value="s:{{g.id}}" {% if selected_category=='s:' ~ g.id %}selected{% endif %}>&nbsp;&nbsp;↳ {{g.name}}</option>{% endfor %}{% endfor %}</select></label>
-    <label>Tipo<select name="tipo"><option value="">Todos</option><option value="income" {% if selected_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if selected_type=='expense' %}selected{% endif %}>Saída</option><option value="transfer" {% if selected_type=='transfer' %}selected{% endif %}>Transferência</option></select></label>
-    <div class="filter-actions"><button class="primary">Filtrar</button><a class="button" target="_blank" href="/admin/financeiro/imprimir?inicio={{start.isoformat()}}&fim={{end.isoformat()}}{% if selected_account %}&conta={{selected_account}}{% endif %}{% if selected_category %}&categoria={{selected_category}}{% endif %}{% if selected_type %}&tipo={{selected_type}}{% endif %}">Imprimir</a></div>
-  </form>
-</div>
 
-<div class="grid two finance-grid">
-  <section class="card">
-    <h2>Saldos por conta</h2>
-    <div class="table-wrap"><table><thead><tr><th>Conta</th><th>Tipo</th><th>Saldo</th><th>Último extrato</th></tr></thead><tbody>
-      {% for a in accounts %}<tr><td><strong>{{a.name}}</strong>{% if a.bank_name %}<div class="muted">{{a.bank_name}}</div>{% endif %}</td><td>{{'Banco' if a.account_type=='bank' else 'Caixa'}}</td><td class="money">R$ {{'%.2f'|format(balances[a.id])|replace('.', ',')}}</td><td>{% if a.last_statement_date %}{{a.last_statement_date.strftime('%d/%m/%Y')}}<div class="muted">Informado: R$ {{'%.2f'|format(a.last_statement_balance)|replace('.', ',')}}</div>{% else %}-{% endif %}</td></tr>{% endfor %}
-    </tbody></table></div>
+  <section class="finance-grid-panel" id="lancamentos">
+    <div class="finance-grid-head">
+      <div>
+        <h2>Lançamentos</h2>
+        <span class="muted">{{ transactions|length }} registro(s) no período de {{start.strftime('%d/%m/%Y')}} a {{end.strftime('%d/%m/%Y')}}.</span>
+      </div>
+      <div class="finance-grid-tools">
+        <input type="search" id="grid-search" placeholder="Buscar na grade..." autocomplete="off">
+        <a class="button compact" href="#saldos">Saldos</a>
+        <a class="button compact" href="#diario">Resumo diário</a>
+        <a class="button compact" href="#categorias">Categorias</a>
+      </div>
+    </div>
+    <div class="desktop-grid-wrap">
+      <table class="desktop-data-grid" id="cash-grid">
+        <thead><tr>
+          <th class="col-date">Data</th>
+          <th class="col-account">Conta</th>
+          <th class="col-description">Histórico / descrição</th>
+          <th class="col-category">Categoria</th>
+          <th class="col-type">Tipo</th>
+          <th class="col-money">Entrada</th>
+          <th class="col-money">Saída</th>
+          <th class="col-source">Origem</th>
+          <th class="col-status">Status</th>
+          <th class="col-actions">Ações</th>
+        </tr></thead>
+        <tbody>
+        {% for tx in transactions %}
+          {% set cg = group_map.get(tx.group_id) if tx.group_id else None %}
+          {% set pg = group_map.get(cg.parent_id) if cg and cg.parent_id else cg %}
+          {% set sg = cg if cg and cg.parent_id else None %}
+          <tr class="cash-grid-row" data-search="{{tx.transaction_date.strftime('%d/%m/%Y')}} {{account_map[tx.account_id].name if tx.account_id in account_map else ''}} {{tx.description}} {{tx.counterparty or ''}} {{pg.name if pg else ''}} {{sg.name if sg else ''}}">
+            <td>{{tx.transaction_date.strftime('%d/%m/%Y')}}</td>
+            <td><strong>{{account_map[tx.account_id].name if tx.account_id in account_map else '-'}}</strong></td>
+            <td><div class="grid-description">{{tx.description}}</div>{% if tx.counterparty %}<div class="grid-subtext">{{tx.counterparty}}</div>{% endif %}{% if tx.document_number %}<div class="grid-subtext">Doc. {{tx.document_number}}</div>{% endif %}</td>
+            <td>{% if pg %}<div class="grid-category"><span>{{pg.name}}</span>{% if sg %}<strong>{{sg.name}}</strong>{% endif %}</div>{% else %}<span class="badge pending">A classificar</span>{% endif %}</td>
+            <td><span class="tx-type tx-{{tx.transaction_type}}">{{ {'income':'Entrada','expense':'Saída','transfer_in':'Transf. entrada','transfer_out':'Transf. saída'}.get(tx.transaction_type,tx.transaction_type) }}</span></td>
+            <td class="money positive">{% if tx.transaction_type in ['income','transfer_in'] %}R$ {{'%.2f'|format(tx.amount)|replace('.', ',')}}{% else %}-{% endif %}</td>
+            <td class="money negative">{% if tx.transaction_type in ['expense','transfer_out'] %}R$ {{'%.2f'|format(tx.amount)|replace('.', ',')}}{% else %}-{% endif %}</td>
+            <td>{{'Extrato' if tx.source=='bank_import' else ('Transferência' if tx.source=='transfer' else 'Manual')}}</td>
+            <td>{% if tx.reconciled %}<span class="badge open">Conciliado</span>{% else %}<span class="badge pending">Pendente</span>{% endif %}</td>
+            <td>
+              <div class="grid-action-buttons">
+                {% if not tx.transfer_ref %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/editar">Editar</a>{% endif %}
+                {% if tx.source=='bank_import' and not tx.transfer_ref and tx.transaction_type in ['income','expense'] %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/transferencia">Transferência</a>{% endif %}
+                {% if not tx.reconciled and tx.transaction_type in ['income','expense'] %}
+                  <details class="classify-popover"><summary>Classificar</summary><form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/classificar"><select name="subgroup_id" required><option value="">Categoria...</option>{% for p in parent_groups if p.active and p.nature==tx.transaction_type %}<optgroup label="{{p.name}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</optgroup>{% endfor %}</select><button class="primary compact">Aplicar</button></form></details>
+                {% endif %}
+                <form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/excluir" onsubmit="return confirm('Excluir este lançamento?')"><button class="danger compact">Excluir</button></form>
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="10" class="muted">Nenhum lançamento encontrado.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
-  <section class="card">
-    <h2>Resumo do período</h2>
-    <div class="summary-list"><div><span>Saldo inicial do período</span><strong>R$ {{'%.2f'|format(opening)|replace('.', ',')}}</strong></div><div><span>Entradas</span><strong>R$ {{'%.2f'|format(entries)|replace('.', ',')}}</strong></div><div><span>Saídas</span><strong>R$ {{'%.2f'|format(expenses)|replace('.', ',')}}</strong></div><div><span>Saldo final do período</span><strong>R$ {{'%.2f'|format(period_end_balance)|replace('.', ',')}}</strong></div></div>
+
+  <div class="finance-lower-grid" id="saldos">
+    <section class="finance-grid-panel">
+      <div class="finance-grid-head"><div><h2>Saldos por conta</h2><span class="muted">Posição financeira atual.</span></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Conta</th><th>Tipo</th><th>Saldo</th><th>Último extrato</th></tr></thead><tbody>
+        {% for a in accounts %}<tr><td><strong>{{a.name}}</strong>{% if a.bank_name %}<div class="grid-subtext">{{a.bank_name}}</div>{% endif %}</td><td>{{'Banco' if a.account_type=='bank' else 'Caixa'}}</td><td class="money"><strong>R$ {{'%.2f'|format(balances[a.id])|replace('.', ',')}}</strong></td><td>{% if a.last_statement_date %}{{a.last_statement_date.strftime('%d/%m/%Y')}}<div class="grid-subtext">Informado: R$ {{'%.2f'|format(a.last_statement_balance)|replace('.', ',')}}</div>{% else %}-{% endif %}</td></tr>{% endfor %}
+      </tbody></table></div>
+    </section>
+    <section class="finance-grid-panel">
+      <div class="finance-grid-head"><div><h2>Resumo do período</h2><span class="muted">Movimentação sem transferências internas.</span></div></div>
+      <div class="finance-period-summary"><div><span>Saldo inicial</span><strong>R$ {{'%.2f'|format(opening)|replace('.', ',')}}</strong></div><div><span>Entradas</span><strong class="positive">R$ {{'%.2f'|format(entries)|replace('.', ',')}}</strong></div><div><span>Saídas</span><strong class="negative">R$ {{'%.2f'|format(expenses)|replace('.', ',')}}</strong></div><div><span>Saldo final</span><strong>R$ {{'%.2f'|format(period_end_balance)|replace('.', ',')}}</strong></div></div>
+    </section>
+  </div>
+
+  <section class="finance-grid-panel" id="diario">
+    <div class="finance-grid-head"><div><h2>Resumo diário</h2><span class="muted">Resultado e saldo acumulado por data.</span></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Entradas</th><th>Saídas</th><th>Resultado do dia</th><th>Saldo acumulado</th></tr></thead><tbody>{% for r in daily_rows %}<tr><td>{{r.date.strftime('%d/%m/%Y')}}</td><td class="money positive">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money negative">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td><td class="money"><strong>R$ {{'%.2f'|format(r.running)|replace('.', ',')}}</strong></td></tr>{% else %}<tr><td colspan="5" class="muted">Sem movimentação no período.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+
+  <section class="finance-grid-panel" id="categorias">
+    <div class="finance-grid-head"><div><h2>Totais por categoria</h2><span class="muted">Grupo e subgrupo dos lançamentos filtrados.</span></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Grupo</th><th>Subgrupo</th><th>Natureza</th><th>Entradas</th><th>Saídas</th><th>Líquido</th></tr></thead><tbody>{% for r in group_rows %}<tr><td>{{r.group.name if r.group else '-'}}</td><td><strong>{{r.subgroup.name if r.subgroup else '-'}}</strong></td><td>{{'Entrada' if r.group and r.group.nature=='income' else 'Saída'}}</td><td class="money">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td></tr>{% else %}<tr><td colspan="6" class="muted">Sem categorias movimentadas.</td></tr>{% endfor %}</tbody></table></div>
   </section>
 </div>
-
-<div class="card"><h2>Resumo diário</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Entradas</th><th>Saídas</th><th>Resultado do dia</th><th>Saldo acumulado</th></tr></thead><tbody>{% for r in daily_rows %}<tr><td>{{r.date.strftime('%d/%m/%Y')}}</td><td class="money positive">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money negative">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td><td class="money"><strong>R$ {{'%.2f'|format(r.running)|replace('.', ',')}}</strong></td></tr>{% else %}<tr><td colspan="5" class="muted">Sem movimentação no período.</td></tr>{% endfor %}</tbody></table></div></div>
-
-<div class="card"><h2>Totais por grupo e subgrupo</h2><div class="table-wrap"><table><thead><tr><th>Grupo</th><th>Subgrupo</th><th>Natureza</th><th>Entradas</th><th>Saídas</th><th>Líquido</th></tr></thead><tbody>{% for r in group_rows %}<tr><td>{{r.group.name if r.group else '-'}}</td><td>{{r.subgroup.name if r.subgroup else '-'}}</td><td>{{'Entrada' if r.group and r.group.nature=='income' else 'Saída'}}</td><td class="money">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td></tr>{% else %}<tr><td colspan="6" class="muted">Sem grupos movimentados.</td></tr>{% endfor %}</tbody></table></div></div>
-
-<div class="card"><h2>Lançamentos</h2><p class="muted">Ao classificar um lançamento importado, o sistema memoriza a descrição para as próximas importações da mesma conta.</p><div class="table-wrap"><table class="wide"><thead><tr><th>Data</th><th>Conta</th><th>Descrição</th><th>Grupo</th><th>Subgrupo</th><th>Tipo</th><th>Valor</th><th>Origem</th><th>Conciliação</th><th>Ações</th></tr></thead><tbody>
-{% for tx in transactions %}
-{% set cg = group_map.get(tx.group_id) if tx.group_id else None %}
-{% set pg = group_map.get(cg.parent_id) if cg and cg.parent_id else cg %}
-{% set sg = cg if cg and cg.parent_id else None %}
-<tr><td>{{tx.transaction_date.strftime('%d/%m/%Y')}}</td><td>{{account_map[tx.account_id].name if tx.account_id in account_map else '-'}}</td><td><strong>{{tx.description}}</strong>{% if tx.counterparty %}<div class="muted">{{tx.counterparty}}</div>{% endif %}</td><td>{% if pg %}{{pg.name}}{% else %}<span class="badge pending">A classificar</span>{% endif %}</td><td>{{sg.name if sg else '-'}}</td><td>{{ {'income':'Entrada','expense':'Saída','transfer_in':'Transf. entrada','transfer_out':'Transf. saída'}.get(tx.transaction_type,tx.transaction_type) }}</td><td class="money {{'positive' if tx.transaction_type in ['income','transfer_in'] else 'negative'}}">R$ {{'%.2f'|format(tx.amount)|replace('.', ',')}}</td><td>{{'Extrato' if tx.source=='bank_import' else ('Transferência' if tx.source=='transfer' else 'Manual')}}</td><td>{% if tx.reconciled %}<span class="badge open">OK</span>{% else %}<span class="badge pending">Pendente</span>{% endif %}</td><td><div class="action-row">
-{% if not tx.transfer_ref %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/editar">Editar</a>{% endif %}
-{% if tx.source=='bank_import' and not tx.transfer_ref and tx.transaction_type in ['income','expense'] %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/transferencia">É transferência</a>{% endif %}
-{% if not tx.reconciled and tx.transaction_type in ['income','expense'] %}
-<form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/classificar" class="inline-classify">
-<select name="subgroup_id" class="compact-select" required><option value="">Categoria...</option>{% for p in parent_groups if p.active and p.nature==tx.transaction_type %}<optgroup label="{{p.name}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</optgroup>{% endfor %}</select>
-<button class="compact">Classificar</button></form>{% endif %}
-<form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/excluir" onsubmit="return confirm('Excluir este lançamento?')"><button class="danger compact">Excluir</button></form></div></td></tr>
-{% else %}<tr><td colspan="10" class="muted">Nenhum lançamento encontrado.</td></tr>{% endfor %}
-</tbody></table></div></div>
-
-
+<script>
+(function(){
+  const search=document.getElementById('grid-search');
+  if(!search) return;
+  const rows=Array.from(document.querySelectorAll('#cash-grid .cash-grid-row'));
+  search.addEventListener('input',()=>{
+    const q=search.value.trim().toLocaleLowerCase('pt-BR');
+    rows.forEach(row=>{ row.style.display=!q || (row.dataset.search||'').toLocaleLowerCase('pt-BR').includes(q) ? '' : 'none'; });
+  });
+})();
+</script>
 {% endblock %}

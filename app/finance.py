@@ -517,6 +517,7 @@ def cash_transaction_new(request: Request, tipo: Optional[str] = None, db: Sessi
         "user": user, "accounts": accounts, "groups": groups, "group_map": group_map,
         "parent_groups": parent_groups, "tx": None, "today": now_local().date(), "error": None,
         "initial_type": initial_type, "selected_parent_id": None, "selected_subgroup_id": None,
+        "message": request.query_params.get("msg"),
     })
 
 
@@ -534,6 +535,7 @@ def cash_transaction_create(
     counterparty: str = Form(""),
     document_number: str = Form(""),
     notes: str = Form(""),
+    save_action: str = Form("close"),
     db: Session = Depends(get_db),
 ):
     user = require_admin(request, db)
@@ -558,6 +560,8 @@ def cash_transaction_create(
             group = resolve_subgroup_selection(db, subgroup_id, transaction_type)
             db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type=transaction_type, amount=value, account_id=account_id, group_id=group.id if group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="manual", created_by_user_id=user.id, reconciled=True))
         db.commit()
+        if save_action == "new":
+            return RedirectResponse(f"/admin/financeiro/lancamentos/novo?tipo={transaction_type}&msg=Lançamento salvo. Cadastre o próximo.", 303)
         return RedirectResponse("/admin/financeiro?msg=Lançamento salvo", 303)
     except Exception as exc:
         db.rollback()

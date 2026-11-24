@@ -1,43 +1,92 @@
-{% extends "base.html" %}{% block title %}Lançamento financeiro{% endblock %}{% block content %}
-<div class="page-head"><div><h1>{{'Editar' if tx else 'Novo'}} lançamento</h1><p class="muted">Escolha somente a categoria. O grupo é vinculado automaticamente ao subgrupo.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
-{% if error %}<div class="alert">{{error}}</div>{% endif %}
-<form method="post" class="card stack narrow-form">
-<label>Data<input type="date" name="transaction_date" value="{{tx.transaction_date.isoformat() if tx else today.isoformat()}}" required></label>
-<label>Tipo<select name="transaction_type" id="tx-type" required><option value="income" {% if initial_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if initial_type=='expense' %}selected{% endif %}>Saída</option>{% if not tx %}<option value="transfer" {% if initial_type=='transfer' %}selected{% endif %}>Transferência entre contas</option>{% endif %}</select></label>
-<label>Conta de origem / conta do lançamento<select name="account_id" id="account-origin" required>{% for a in accounts if a.active %}<option value="{{a.id}}" {% if tx and tx.account_id==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select></label>
-<div id="destination-row" style="display:none"><label>Conta de destino<select name="destination_account_id"><option value="">Selecione...</option>{% for a in accounts if a.active %}<option value="{{a.id}}">{{a.name}}</option>{% endfor %}</select></label></div>
-<div id="category-area" class="stack">
-<label>Categoria / subgrupo
-<select name="subgroup_id" id="tx-subgroup">
-<option value="">Selecione...</option>
-{% for p in parent_groups if p.active and p.nature!='transfer' %}
-  <optgroup label="{{p.name}}" data-nature="{{p.nature}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}" data-nature="{{g.nature}}" {% if selected_subgroup_id==g.id %}selected{% endif %}>{{g.name}}</option>{% endfor %}</optgroup>
-{% endfor %}
-</select>
-</label>
-<div class="category-preview" id="category-preview">O grupo será preenchido automaticamente a partir da categoria escolhida.</div>
+{% extends "base.html" %}
+{% block title %}Lançamento financeiro{% endblock %}
+{% block content %}
+<div class="finance-editor-page">
+  <div class="finance-titlebar editor-titlebar">
+    <div>
+      <h1>{{'Editar lançamento' if tx else 'Novo lançamento'}}</h1>
+      <p class="muted">Preencha os dados financeiros. Ao escolher o subgrupo, o grupo principal é definido automaticamente.</p>
+    </div>
+    <div class="finance-toolbar"><a class="button" href="/admin/financeiro">← Voltar ao fluxo</a></div>
+  </div>
+  {% if message %}<div class="success">{{message}}</div>{% endif %}
+  {% if error %}<div class="alert">{{error}}</div>{% endif %}
+
+  <form method="post" class="finance-editor-form" id="finance-entry-form">
+    <main class="finance-editor-main">
+      <section class="editor-box">
+        <div class="editor-box-head"><strong>Dados do lançamento</strong><span class="muted">Campos principais</span></div>
+        <div class="editor-grid editor-grid-3">
+          <label>Data<input type="date" name="transaction_date" id="tx-date" value="{{tx.transaction_date.isoformat() if tx else today.isoformat()}}" required></label>
+          <label>Tipo<select name="transaction_type" id="tx-type" required><option value="income" {% if initial_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if initial_type=='expense' %}selected{% endif %}>Saída</option>{% if not tx %}<option value="transfer" {% if initial_type=='transfer' %}selected{% endif %}>Transferência entre contas</option>{% endif %}</select></label>
+          <label>Valor (R$)<input name="amount" id="tx-amount" inputmode="decimal" value="{{'%.2f'|format(tx.amount)|replace('.', ',') if tx else ''}}" placeholder="0,00" required></label>
+        </div>
+        <div class="editor-grid editor-grid-2">
+          <label>Conta de origem / conta do lançamento<select name="account_id" id="account-origin" required>{% for a in accounts if a.active %}<option value="{{a.id}}" {% if tx and tx.account_id==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select></label>
+          <div id="destination-row" style="display:none"><label>Conta de destino<select name="destination_account_id" id="account-destination"><option value="">Selecione...</option>{% for a in accounts if a.active %}<option value="{{a.id}}">{{a.name}}</option>{% endfor %}</select></label></div>
+          <div id="category-area">
+            <label>Categoria / subgrupo
+              <select name="subgroup_id" id="tx-subgroup">
+                <option value="">Selecione...</option>
+                {% for p in parent_groups if p.active and p.nature!='transfer' %}<optgroup label="{{p.name}}" data-nature="{{p.nature}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}" data-nature="{{g.nature}}" {% if selected_subgroup_id==g.id %}selected{% endif %}>{{g.name}}</option>{% endfor %}</optgroup>{% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="editor-box">
+        <div class="editor-box-head"><strong>Histórico e identificação</strong><span class="muted">Informações para localizar o lançamento depois.</span></div>
+        <label>Descrição / histórico<input name="description" id="tx-description" value="{{tx.description if tx else ''}}" placeholder="Ex.: Pagamento fornecedor, recebimento PIX..." required></label>
+        <div class="editor-grid editor-grid-2">
+          <label>Favorecido / pagador<input name="counterparty" id="tx-counterparty" value="{{tx.counterparty or '' if tx else ''}}"></label>
+          <label>Documento<input name="document_number" id="tx-document" value="{{tx.document_number or '' if tx else ''}}" placeholder="NF, boleto, comprovante..."></label>
+        </div>
+        <label>Observações<textarea name="notes" id="tx-notes" rows="4">{{tx.notes or '' if tx else ''}}</textarea></label>
+      </section>
+
+      {% if tx %}
+      <section class="editor-box compact-box">
+        <label class="editor-check"><input type="checkbox" name="reconciled" value="1" {% if tx.reconciled %}checked{% endif %}><span><strong>Lançamento conciliado/conferido</strong><small>Marque quando o movimento já foi conferido com o banco ou caixa.</small></span></label>
+      </section>
+      {% endif %}
+    </main>
+
+    <aside class="finance-editor-side">
+      <section class="editor-box sticky-editor-summary">
+        <div class="editor-box-head"><strong>Resumo</strong><span class="muted">Conferência antes de salvar</span></div>
+        <div class="editor-summary-list">
+          <div><span>Data</span><strong id="summary-date">—</strong></div>
+          <div><span>Tipo</span><strong id="summary-type">—</strong></div>
+          <div><span>Conta</span><strong id="summary-account">—</strong></div>
+          <div id="summary-destination-row" style="display:none"><span>Destino</span><strong id="summary-destination">—</strong></div>
+          <div id="summary-category-row"><span>Categoria</span><strong id="summary-category">—</strong></div>
+          <div class="summary-amount"><span>Valor</span><strong id="summary-amount">R$ 0,00</strong></div>
+        </div>
+        <div class="editor-help" id="category-preview">O grupo será preenchido automaticamente a partir da categoria escolhida.</div>
+      </section>
+    </aside>
+
+    <div class="finance-editor-actions">
+      <a class="button" href="/admin/financeiro">Cancelar</a>
+      {% if not tx %}<button class="button" type="submit" name="save_action" value="new">Salvar e novo</button>{% endif %}
+      <button class="primary" type="submit" name="save_action" value="close">Salvar{{' alterações' if tx else ' lançamento'}}</button>
+    </div>
+  </form>
 </div>
-<label>Descrição<input name="description" value="{{tx.description if tx else ''}}" required></label>
-<label>Valor (R$)<input name="amount" inputmode="decimal" value="{{'%.2f'|format(tx.amount)|replace('.', ',') if tx else ''}}" required></label>
-<label>Favorecido / pagador<input name="counterparty" value="{{tx.counterparty or '' if tx else ''}}"></label>
-<label>Documento<input name="document_number" value="{{tx.document_number or '' if tx else ''}}"></label>
-<label>Observações<textarea name="notes">{{tx.notes or '' if tx else ''}}</textarea></label>
-{% if tx %}<label class="check"><input type="checkbox" name="reconciled" value="1" {% if tx.reconciled %}checked{% endif %}> Lançamento conciliado/conferido</label>{% endif %}
-<div class="form-actions"><button class="primary">Salvar</button><a class="button" href="/admin/financeiro">Cancelar</a></div>
-</form>
 <script>
 const typeSelect=document.getElementById('tx-type');
 const destination=document.getElementById('destination-row');
 const categoryArea=document.getElementById('category-area');
 const sub=document.getElementById('tx-subgroup');
 const preview=document.getElementById('category-preview');
+const origin=document.getElementById('account-origin');
+const dest=document.getElementById('account-destination');
+const amount=document.getElementById('tx-amount');
+const dateInput=document.getElementById('tx-date');
 function syncCategories(keep=true){
   const nature=typeSelect.value;
-  Array.from(sub.querySelectorAll('optgroup')).forEach(group=>{
-    const show=group.dataset.nature===nature;
-    group.disabled=!show;
-    group.hidden=!show;
-  });
+  Array.from(sub.querySelectorAll('optgroup')).forEach(group=>{ const show=group.dataset.nature===nature; group.disabled=!show; group.hidden=!show; });
   const current=sub.selectedOptions[0];
   if(!keep && current && current.value) sub.value='';
   if(current && current.dataset.nature && current.dataset.nature!==nature) sub.value='';
@@ -45,18 +94,38 @@ function syncCategories(keep=true){
 }
 function updatePreview(){
   const option=sub.selectedOptions[0];
-  if(!option || !option.value){ preview.textContent='O grupo será preenchido automaticamente a partir da categoria escolhida.'; return; }
+  const sum=document.getElementById('summary-category');
+  if(!option || !option.value){ preview.textContent='O grupo será preenchido automaticamente a partir da categoria escolhida.'; sum.textContent='—'; return; }
   const parent=option.parentElement;
-  preview.innerHTML='<strong>Grupo:</strong> '+(parent && parent.label ? parent.label : '—')+' <span class="muted">›</span> <strong>Subgrupo:</strong> '+option.textContent;
+  const label=(parent && parent.label ? parent.label+' › ' : '')+option.textContent;
+  preview.innerHTML='<strong>Categoria selecionada:</strong> '+label;
+  sum.textContent=label;
 }
 function sync(){
   const isTransfer=typeSelect.value==='transfer';
   destination.style.display=isTransfer?'block':'none';
-  categoryArea.style.display=isTransfer?'none':'grid';
+  categoryArea.style.display=isTransfer?'none':'block';
+  document.getElementById('summary-destination-row').style.display=isTransfer?'flex':'none';
+  document.getElementById('summary-category-row').style.display=isTransfer?'none':'flex';
   if(!isTransfer) syncCategories(true);
+  updateSummary();
+}
+function moneyDisplay(v){
+  const cleaned=(v||'').replace(/\./g,'').replace(',','.').replace(/[^0-9.-]/g,'');
+  const n=Number(cleaned||0);
+  return 'R$ '+n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function updateSummary(){
+  document.getElementById('summary-date').textContent=dateInput.value ? dateInput.value.split('-').reverse().join('/') : '—';
+  document.getElementById('summary-type').textContent=typeSelect.options[typeSelect.selectedIndex]?.text || '—';
+  document.getElementById('summary-account').textContent=origin.options[origin.selectedIndex]?.text || '—';
+  if(dest) document.getElementById('summary-destination').textContent=dest.options[dest.selectedIndex]?.text || '—';
+  document.getElementById('summary-amount').textContent=moneyDisplay(amount.value);
+  updatePreview();
 }
 typeSelect.addEventListener('change',()=>{sync(); syncCategories(false)});
-sub.addEventListener('change',updatePreview);
-sync(); updatePreview();
+sub.addEventListener('change',updateSummary);
+[origin,dest,amount,dateInput].filter(Boolean).forEach(el=>el.addEventListener(el===amount?'input':'change',updateSummary));
+sync(); updateSummary();
 </script>
 {% endblock %}
