@@ -7,12 +7,13 @@
       <h1>{{'Editar lançamento' if tx else 'Novo lançamento'}}</h1>
       <p class="muted">Preencha os dados financeiros. Ao escolher o subgrupo, o grupo principal é definido automaticamente.</p>
     </div>
-    <div class="finance-toolbar"><a class="button" href="/admin/financeiro">← Voltar ao fluxo</a></div>
+    <div class="finance-toolbar"><a class="button" href="{{return_to if tx and return_to else '/admin/financeiro'}}">← Voltar ao fluxo</a></div>
   </div>
   {% if message %}<div class="success">{{message}}</div>{% endif %}
   {% if error %}<div class="alert">{{error}}</div>{% endif %}
 
   <form method="post" class="finance-editor-form" id="finance-entry-form">
+    {% if tx %}<input type="hidden" name="return_to" value="{{return_to or '/admin/financeiro'}}">{% endif %}
     <main class="finance-editor-main">
       <section class="editor-box">
         <div class="editor-box-head"><strong>Dados do lançamento</strong><span class="muted">Campos principais</span></div>
@@ -68,7 +69,7 @@
     </aside>
 
     <div class="finance-editor-actions">
-      <a class="button" href="/admin/financeiro">Cancelar</a>
+      <a class="button" href="{{return_to if tx and return_to else '/admin/financeiro'}}">Cancelar</a>
       {% if not tx %}<button class="button" type="submit" name="save_action" value="new">Salvar e novo</button>{% endif %}
       <button class="primary" type="submit" name="save_action" value="close">Salvar{{' alterações' if tx else ' lançamento'}}</button>
     </div>

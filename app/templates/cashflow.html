@@ -100,7 +100,7 @@
             <td>{% if tx.reconciled %}<span class="badge open">Conciliado</span>{% else %}<span class="badge pending">Pendente</span>{% endif %}</td>
             <td>
               <div class="grid-action-buttons">
-                {% if not tx.transfer_ref %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/editar">Editar</a>{% endif %}
+                {% if not tx.transfer_ref %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/editar?return_to={{return_to_encoded}}">Editar</a>{% endif %}
                 {% if tx.source=='bank_import' and not tx.transfer_ref and tx.transaction_type in ['income','expense'] %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/transferencia">Transferência</a>{% endif %}
                 {% if not tx.reconciled and tx.transaction_type in ['income','expense'] %}
                   <details class="classify-popover"><summary>Classificar</summary><form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/classificar"><select name="subgroup_id" required><option value="">Categoria...</option>{% for p in parent_groups if p.active and p.nature==tx.transaction_type %}<optgroup label="{{p.name}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</optgroup>{% endfor %}</select><button class="primary compact">Aplicar</button></form></details>

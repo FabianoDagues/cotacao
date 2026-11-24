@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, HTTPException
@@ -118,12 +119,38 @@ def account_balance(db: Session, account: FinancialAccount, until: Optional[date
     return total
 
 
-def total_balance_before(db: Session, before_date: date) -> Decimal:
+def total_balance_before(db: Session, before_date: date, account_id: Optional[int] = None) -> Decimal:
     total = Decimal("0")
-    accounts = db.scalars(select(FinancialAccount).where(FinancialAccount.active.is_(True))).all()
+    q = select(FinancialAccount).where(FinancialAccount.active.is_(True))
+    if account_id:
+        q = q.where(FinancialAccount.id == account_id)
+    accounts = db.scalars(q).all()
     for acc in accounts:
         total += account_balance(db, acc, before_date - timedelta(days=1))
     return total
+
+
+def parse_optional_int_query(value: Optional[str], field_name: str = "filtro") -> Optional[int]:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{field_name.capitalize()} inválido.")
+
+
+def safe_finance_return_url(return_to: Optional[str], message: Optional[str] = None) -> str:
+    target = return_to or "/admin/financeiro"
+    parts = urlsplit(target)
+    # Só permite retorno para a tela principal do financeiro neste próprio sistema.
+    if parts.scheme or parts.netloc or parts.path != "/admin/financeiro":
+        parts = urlsplit("/admin/financeiro")
+    params = list(parse_qsl(parts.query, keep_blank_values=False))
+    if message:
+        params = [(k, v) for k, v in params if k != "msg"]
+        params.append(("msg", message))
+    query = urlencode(params)
+    return parts.path + (("?" + query) if query else "")
 
 
 def seed_finance_defaults():
@@ -403,7 +430,7 @@ def cashflow_page(
     request: Request,
     inicio: Optional[str] = None,
     fim: Optional[str] = None,
-    conta: Optional[int] = None,
+    conta: Optional[str] = None,
     categoria: Optional[str] = None,
     grupo: Optional[int] = None,
     subgrupo: Optional[int] = None,
@@ -416,15 +443,16 @@ def cashflow_page(
     end = parse_date_value(fim) if fim else today
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
+    account_id = parse_optional_int_query(conta, "conta")
     category_group, category_subgroup = parse_category_filter(categoria)
     if categoria:
         grupo, subgrupo = category_group, category_subgroup
-    txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
+    txs = filtered_transactions(db, start, end, account_id, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
     group_map, parent_groups, children_by_parent = group_hierarchy(groups)
     account_map = {a.id: a for a in accounts}
     entries, expenses, transfer_in, transfer_out, daily, group_totals = summarize_transactions(txs)
-    opening = total_balance_before(db, start)
+    opening = total_balance_before(db, start, account_id)
     daily_rows = []
     running = opening
     for d in sorted(daily):
@@ -432,6 +460,15 @@ def cashflow_page(
         running += net
         daily_rows.append({"date": d, **daily[d], "net": net, "running": running})
     group_rows = build_group_rows(group_totals, group_map)
+    return_params = [("inicio", start.isoformat()), ("fim", end.isoformat())]
+    if account_id:
+        return_params.append(("conta", str(account_id)))
+    selected_category_value = categoria or (f"s:{subgrupo}" if subgrupo else (f"g:{grupo}" if grupo else ""))
+    if selected_category_value:
+        return_params.append(("categoria", selected_category_value))
+    if tipo:
+        return_params.append(("tipo", tipo))
+    return_to = "/admin/financeiro?" + urlencode(return_params)
     return templates.TemplateResponse(request, "cashflow.html", {
         "user": user,
         "transactions": txs,
@@ -454,11 +491,13 @@ def cashflow_page(
         "account_map": account_map,
         "start": start,
         "end": end,
-        "selected_account": conta,
+        "selected_account": account_id,
         "selected_group": grupo,
         "selected_subgroup": subgrupo,
-        "selected_category": categoria or (f"s:{subgrupo}" if subgrupo else (f"g:{grupo}" if grupo else "")),
+        "selected_category": selected_category_value,
         "selected_type": tipo or "",
+        "return_to": return_to,
+        "return_to_encoded": quote(return_to, safe=""),
         "today": today,
         "last7": today - timedelta(days=6),
         "month_start": today.replace(day=1),
@@ -471,7 +510,7 @@ def cashflow_print(
     request: Request,
     inicio: str,
     fim: str,
-    conta: Optional[int] = None,
+    conta: Optional[str] = None,
     categoria: Optional[str] = None,
     grupo: Optional[int] = None,
     subgrupo: Optional[int] = None,
@@ -482,15 +521,16 @@ def cashflow_print(
     start, end = parse_date_value(inicio), parse_date_value(fim)
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
+    account_id = parse_optional_int_query(conta, "conta")
     category_group, category_subgroup = parse_category_filter(categoria)
     if categoria:
         grupo, subgrupo = category_group, category_subgroup
-    txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
+    txs = filtered_transactions(db, start, end, account_id, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
     group_map, _, _ = group_hierarchy(groups)
     account_map = {a.id: a for a in accounts}
     entries, expenses, _, _, daily, group_totals = summarize_transactions(txs)
-    opening = total_balance_before(db, start)
+    opening = total_balance_before(db, start, account_id)
     running = opening
     daily_rows = []
     for d in sorted(daily):
@@ -573,7 +613,7 @@ def cash_transaction_create(
 
 
 @router.get("/admin/financeiro/lancamentos/{tx_id}/editar", response_class=HTMLResponse)
-def cash_transaction_edit_page(tx_id: int, request: Request, db: Session = Depends(get_db)):
+def cash_transaction_edit_page(tx_id: int, request: Request, return_to: Optional[str] = None, db: Session = Depends(get_db)):
     user = require_admin(request, db)
     tx = db.get(CashTransaction, tx_id)
     if not tx:
@@ -589,6 +629,7 @@ def cash_transaction_edit_page(tx_id: int, request: Request, db: Session = Depen
         "initial_type": tx.transaction_type,
         "selected_parent_id": parent.id if parent else None,
         "selected_subgroup_id": subgroup.id if subgroup else None,
+        "return_to": safe_finance_return_url(return_to),
     })
 
 
@@ -598,7 +639,7 @@ def cash_transaction_edit(
     transaction_date: str = Form(...), transaction_type: str = Form(...), account_id: int = Form(...),
     group_id: Optional[int] = Form(None), subgroup_id: Optional[int] = Form(None), description: str = Form(...), amount: str = Form(...),
     counterparty: str = Form(""), document_number: str = Form(""), notes: str = Form(""), reconciled: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
+    return_to: str = Form(""), db: Session = Depends(get_db),
 ):
     require_admin(request, db)
     tx = db.get(CashTransaction, tx_id)
@@ -617,7 +658,7 @@ def cash_transaction_edit(
     if group:
         remember_classification_rule(db, tx, group)
     db.commit()
-    return RedirectResponse("/admin/financeiro?msg=Lançamento alterado", 303)
+    return RedirectResponse(safe_finance_return_url(return_to, "Lançamento alterado"), 303)
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/classificar")
