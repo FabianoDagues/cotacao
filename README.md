@@ -117,3 +117,6 @@ Adicionado módulo administrativo de fluxo de caixa baseado na planilha de refer
 ## Financeiro V7.2
 
 O Fluxo de Caixa agora possui grupos e subgrupos separados, transferência manual entre contas, filtros por período, deduplicação reforçada de extratos sobrepostos e memória de classificação para reaplicar automaticamente o grupo/subgrupo a descrições já classificadas.
+
+## V7.3 — Plano de contas simplificado
+A classificação financeira passou a exigir somente o subgrupo/categoria. O grupo é vinculado automaticamente. A tela de plano de contas foi redesenhada para edição rápida em cartões.

@@ -32,10 +32,9 @@
     <label>Data inicial do lançamento<input type="date" name="inicio" value="{{ start.isoformat() }}"></label>
     <label>Data final do lançamento<input type="date" name="fim" value="{{ end.isoformat() }}"></label>
     <label>Conta<select name="conta"><option value="">Todas</option>{% for a in accounts %}<option value="{{a.id}}" {% if selected_account==a.id %}selected{% endif %}>{{a.name}}</option>{% endfor %}</select></label>
-    <label>Grupo principal<select name="grupo" id="filter-group"><option value="">Todos</option>{% for g in parent_groups if g.active and g.nature!='transfer' %}<option value="{{g.id}}" {% if selected_group==g.id %}selected{% endif %}>{{g.name}}</option>{% endfor %}</select></label>
-    <label>Subgrupo<select name="subgrupo" id="filter-subgroup"><option value="">Todos</option>{% for g in groups if g.active and g.parent_id %}<option value="{{g.id}}" data-parent="{{g.parent_id}}" {% if selected_subgroup==g.id %}selected{% endif %}>{{g.name}}</option>{% endfor %}</select></label>
+    <label>Categoria<select name="categoria"><option value="">Todas</option>{% for p in parent_groups if p.active and p.nature!='transfer' %}<option value="g:{{p.id}}" {% if selected_category=='g:' ~ p.id %}selected{% endif %}>{{p.name}} — todos</option>{% for g in groups if g.active and g.parent_id==p.id %}<option value="s:{{g.id}}" {% if selected_category=='s:' ~ g.id %}selected{% endif %}>&nbsp;&nbsp;↳ {{g.name}}</option>{% endfor %}{% endfor %}</select></label>
     <label>Tipo<select name="tipo"><option value="">Todos</option><option value="income" {% if selected_type=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if selected_type=='expense' %}selected{% endif %}>Saída</option><option value="transfer" {% if selected_type=='transfer' %}selected{% endif %}>Transferência</option></select></label>
-    <div class="filter-actions"><button class="primary">Filtrar</button><a class="button" target="_blank" href="/admin/financeiro/imprimir?inicio={{start.isoformat()}}&fim={{end.isoformat()}}{% if selected_account %}&conta={{selected_account}}{% endif %}{% if selected_group %}&grupo={{selected_group}}{% endif %}{% if selected_subgroup %}&subgrupo={{selected_subgroup}}{% endif %}{% if selected_type %}&tipo={{selected_type}}{% endif %}">Imprimir</a></div>
+    <div class="filter-actions"><button class="primary">Filtrar</button><a class="button" target="_blank" href="/admin/financeiro/imprimir?inicio={{start.isoformat()}}&fim={{end.isoformat()}}{% if selected_account %}&conta={{selected_account}}{% endif %}{% if selected_category %}&categoria={{selected_category}}{% endif %}{% if selected_type %}&tipo={{selected_type}}{% endif %}">Imprimir</a></div>
   </form>
 </div>
 
@@ -65,33 +64,12 @@
 {% if not tx.transfer_ref %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/editar">Editar</a>{% endif %}
 {% if tx.source=='bank_import' and not tx.transfer_ref and tx.transaction_type in ['income','expense'] %}<a class="button compact" href="/admin/financeiro/lancamentos/{{tx.id}}/transferencia">É transferência</a>{% endif %}
 {% if not tx.reconciled and tx.transaction_type in ['income','expense'] %}
-<form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/classificar" class="inline-classify" data-nature="{{tx.transaction_type}}">
-<select name="group_id" class="compact-select js-parent" required><option value="">Grupo...</option>{% for g in parent_groups if g.active and g.nature==tx.transaction_type %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</select>
-<select name="subgroup_id" class="compact-select js-sub"><option value="">Subgrupo...</option>{% for g in groups if g.active and g.parent_id and g.nature==tx.transaction_type %}<option value="{{g.id}}" data-parent="{{g.parent_id}}">{{g.name}}</option>{% endfor %}</select>
+<form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/classificar" class="inline-classify">
+<select name="subgroup_id" class="compact-select" required><option value="">Categoria...</option>{% for p in parent_groups if p.active and p.nature==tx.transaction_type %}<optgroup label="{{p.name}}">{% for g in groups if g.active and g.parent_id==p.id %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</optgroup>{% endfor %}</select>
 <button class="compact">Classificar</button></form>{% endif %}
 <form method="post" action="/admin/financeiro/lancamentos/{{tx.id}}/excluir" onsubmit="return confirm('Excluir este lançamento?')"><button class="danger compact">Excluir</button></form></div></td></tr>
 {% else %}<tr><td colspan="10" class="muted">Nenhum lançamento encontrado.</td></tr>{% endfor %}
 </tbody></table></div></div>
 
-<script>
-function filterSubgroups(parentSelect, subSelect, keepSelection=true){
-  const parent=parentSelect.value;
-  let selected=keepSelection ? subSelect.value : '';
-  Array.from(subSelect.options).forEach((opt,idx)=>{
-    if(idx===0){ opt.hidden=false; return; }
-    opt.hidden = !!parent && opt.dataset.parent !== parent;
-    if(!parent) opt.hidden=false;
-  });
-  if(selected){
-    const current=Array.from(subSelect.options).find(o=>o.value===selected);
-    if(!current || current.hidden) subSelect.value='';
-  }
-}
-const fg=document.getElementById('filter-group'), fs=document.getElementById('filter-subgroup');
-if(fg&&fs){ filterSubgroups(fg,fs,true); fg.addEventListener('change',()=>filterSubgroups(fg,fs,false)); }
-document.querySelectorAll('.inline-classify').forEach(form=>{
-  const p=form.querySelector('.js-parent'), sub=form.querySelector('.js-sub');
-  filterSubgroups(p,sub,false); p.addEventListener('change',()=>filterSubgroups(p,sub,false));
-});
-</script>
+
 {% endblock %}

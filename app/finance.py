@@ -265,15 +265,9 @@ def group_parts(group_id: Optional[int], group_map):
 
 
 def resolve_group_selection(db: Session, parent_id: Optional[int], subgroup_id: Optional[int], expected_nature: str) -> Optional[CashGroup]:
+    """Compatibilidade com versões antigas: prioriza sempre o subgrupo."""
     if subgroup_id:
-        subgroup = db.get(CashGroup, subgroup_id)
-        if not subgroup or not subgroup.active:
-            raise ValueError("Subgrupo inválido ou inativo.")
-        if parent_id and subgroup.parent_id != parent_id:
-            raise ValueError("O subgrupo não pertence ao grupo selecionado.")
-        if subgroup.nature != expected_nature:
-            raise ValueError("O subgrupo não corresponde ao tipo do lançamento.")
-        return subgroup
+        return resolve_subgroup_selection(db, subgroup_id, expected_nature)
     if not parent_id:
         return None
     parent = db.get(CashGroup, parent_id)
@@ -283,9 +277,38 @@ def resolve_group_selection(db: Session, parent_id: Optional[int], subgroup_id: 
         raise ValueError("O grupo não corresponde ao tipo do lançamento.")
     has_children = db.scalar(select(CashGroup.id).where(CashGroup.parent_id == parent.id, CashGroup.active.is_(True)).limit(1))
     if has_children and not parent.name.startswith("A classificar"):
-        raise ValueError("Selecione também um subgrupo.")
+        raise ValueError("Selecione uma categoria/subgrupo. O grupo será definido automaticamente.")
     return parent
 
+
+def resolve_subgroup_selection(db: Session, subgroup_id: Optional[int], expected_nature: str) -> Optional[CashGroup]:
+    if not subgroup_id:
+        raise ValueError("Selecione uma categoria/subgrupo.")
+    subgroup = db.get(CashGroup, subgroup_id)
+    if not subgroup or not subgroup.active or not subgroup.parent_id:
+        raise ValueError("Categoria/subgrupo inválido ou inativo.")
+    parent = db.get(CashGroup, subgroup.parent_id)
+    if not parent or not parent.active:
+        raise ValueError("O grupo desta categoria está inativo.")
+    if subgroup.nature != expected_nature or parent.nature != expected_nature:
+        raise ValueError("A categoria não corresponde ao tipo do lançamento.")
+    return subgroup
+
+
+def parse_category_filter(value: Optional[str]):
+    """Retorna (grupo_id, subgrupo_id) a partir de g:123 ou s:456."""
+    if not value:
+        return None, None
+    try:
+        prefix, raw_id = value.split(":", 1)
+        ident = int(raw_id)
+    except (ValueError, AttributeError):
+        return None, None
+    if prefix == "g":
+        return ident, None
+    if prefix == "s":
+        return None, ident
+    return None, None
 
 def remember_classification_rule(db: Session, tx: CashTransaction, group: CashGroup):
     if tx.source != "bank_import" or tx.transaction_type not in {"income", "expense"}:
@@ -381,6 +404,7 @@ def cashflow_page(
     inicio: Optional[str] = None,
     fim: Optional[str] = None,
     conta: Optional[int] = None,
+    categoria: Optional[str] = None,
     grupo: Optional[int] = None,
     subgrupo: Optional[int] = None,
     tipo: Optional[str] = None,
@@ -392,6 +416,9 @@ def cashflow_page(
     end = parse_date_value(fim) if fim else today
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
+    category_group, category_subgroup = parse_category_filter(categoria)
+    if categoria:
+        grupo, subgrupo = category_group, category_subgroup
     txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
     group_map, parent_groups, children_by_parent = group_hierarchy(groups)
@@ -430,6 +457,7 @@ def cashflow_page(
         "selected_account": conta,
         "selected_group": grupo,
         "selected_subgroup": subgrupo,
+        "selected_category": categoria or (f"s:{subgrupo}" if subgrupo else (f"g:{grupo}" if grupo else "")),
         "selected_type": tipo or "",
         "today": today,
         "last7": today - timedelta(days=6),
@@ -444,6 +472,7 @@ def cashflow_print(
     inicio: str,
     fim: str,
     conta: Optional[int] = None,
+    categoria: Optional[str] = None,
     grupo: Optional[int] = None,
     subgrupo: Optional[int] = None,
     tipo: Optional[str] = None,
@@ -453,6 +482,9 @@ def cashflow_print(
     start, end = parse_date_value(inicio), parse_date_value(fim)
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
+    category_group, category_subgroup = parse_category_filter(categoria)
+    if categoria:
+        grupo, subgrupo = category_group, category_subgroup
     txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
     group_map, _, _ = group_hierarchy(groups)
@@ -523,7 +555,7 @@ def cash_transaction_create(
         else:
             if transaction_type not in {"income", "expense"}:
                 raise ValueError("Tipo de lançamento inválido.")
-            group = resolve_group_selection(db, group_id, subgroup_id, transaction_type)
+            group = resolve_subgroup_selection(db, subgroup_id, transaction_type)
             db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type=transaction_type, amount=value, account_id=account_id, group_id=group.id if group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="manual", created_by_user_id=user.id, reconciled=True))
         db.commit()
         return RedirectResponse("/admin/financeiro?msg=Lançamento salvo", 303)
@@ -572,7 +604,7 @@ def cash_transaction_edit(
     if not d or value <= 0 or transaction_type not in {"income", "expense"}:
         raise HTTPException(400, "Dados inválidos")
     try:
-        group = resolve_group_selection(db, group_id, subgroup_id, transaction_type)
+        group = resolve_subgroup_selection(db, subgroup_id, transaction_type)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     tx.transaction_date=d; tx.transaction_type=transaction_type; tx.account_id=account_id; tx.group_id=group.id if group else None
@@ -586,18 +618,18 @@ def cash_transaction_edit(
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/classificar")
 def cash_transaction_classify(
-    tx_id: int, request: Request, group_id: int = Form(...), subgroup_id: Optional[int] = Form(None), db: Session = Depends(get_db)
+    tx_id: int, request: Request, subgroup_id: int = Form(...), group_id: Optional[int] = Form(None), db: Session = Depends(get_db)
 ):
     require_admin(request, db)
     tx = db.get(CashTransaction, tx_id)
     if not tx or tx.transaction_type not in {"income", "expense"}:
         raise HTTPException(404)
     try:
-        group = resolve_group_selection(db, group_id, subgroup_id, tx.transaction_type)
+        group = resolve_subgroup_selection(db, subgroup_id, tx.transaction_type)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     if not group:
-        raise HTTPException(400, "Selecione grupo e subgrupo.")
+        raise HTTPException(400, "Selecione uma categoria/subgrupo.")
     tx.group_id = group.id; tx.reconciled = True
     remember_classification_rule(db, tx, group)
     db.commit()
@@ -671,7 +703,8 @@ def cash_groups_page(request: Request, db: Session = Depends(get_db)):
     group_map, parents, children_by_parent = group_hierarchy(groups)
     return templates.TemplateResponse(request, "cash_groups.html", {
         "user": user, "groups": groups, "group_map": group_map, "parents": parents,
-        "children_by_parent": children_by_parent, "error": None
+        "children_by_parent": children_by_parent, "error": None,
+        "message": request.query_params.get("msg")
     })
 
 
@@ -684,9 +717,14 @@ def cash_group_create(
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(400, "Informe o nome.")
-    if db.scalar(select(CashGroup).where(func.lower(CashGroup.name) == clean_name.lower())):
-        raise HTTPException(400, "Já existe um grupo ou subgrupo com esse nome")
     parent = db.get(CashGroup, parent_id) if parent_id else None
+    duplicate_q = select(CashGroup.id).where(func.lower(CashGroup.name) == clean_name.lower())
+    if parent_id:
+        duplicate_q = duplicate_q.where(CashGroup.parent_id == parent_id)
+    else:
+        duplicate_q = duplicate_q.where(CashGroup.parent_id.is_(None))
+    if db.scalar(duplicate_q):
+        raise HTTPException(400, "Já existe um item com esse nome neste grupo")
     if parent_id and (not parent or parent.parent_id):
         raise HTTPException(400, "Grupo principal inválido")
     if parent:
@@ -695,14 +733,45 @@ def cash_group_create(
         raise HTTPException(400, "Natureza inválida")
     db.add(CashGroup(name=clean_name, nature=nature, parent_id=parent.id if parent else None, active=True))
     db.commit()
-    return RedirectResponse("/admin/financeiro/grupos", 303)
+    return RedirectResponse("/admin/financeiro/grupos?msg=Item adicionado", 303)
+
+
+@router.post("/admin/financeiro/grupos/{group_id}/editar")
+def cash_group_edit(
+    group_id: int, request: Request, name: str = Form(...), nature: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    require_admin(request, db)
+    g = db.get(CashGroup, group_id)
+    if not g:
+        raise HTTPException(404)
+    clean_name = name.strip()
+    if not clean_name:
+        raise HTTPException(400, "Informe o nome")
+    duplicate_q = select(CashGroup.id).where(
+        CashGroup.id != g.id,
+        func.lower(CashGroup.name) == clean_name.lower(),
+    )
+    if g.parent_id:
+        duplicate_q = duplicate_q.where(CashGroup.parent_id == g.parent_id)
+    else:
+        duplicate_q = duplicate_q.where(CashGroup.parent_id.is_(None))
+    if db.scalar(duplicate_q):
+        raise HTTPException(400, "Já existe outro item com esse nome neste grupo")
+    g.name = clean_name
+    if not g.parent_id and nature in {"income", "expense"} and nature != g.nature:
+        g.nature = nature
+        for child in db.scalars(select(CashGroup).where(CashGroup.parent_id == g.id)).all():
+            child.nature = nature
+    db.commit()
+    return RedirectResponse("/admin/financeiro/grupos?msg=Alteração salva", 303)
 
 
 @router.post("/admin/financeiro/grupos/{group_id}/status")
 def cash_group_status(group_id: int, request: Request, db: Session = Depends(get_db)):
     require_admin(request, db); g=db.get(CashGroup, group_id)
     if not g: raise HTTPException(404)
-    g.active = not g.active; db.commit(); return RedirectResponse("/admin/financeiro/grupos", 303)
+    g.active = not g.active; db.commit(); return RedirectResponse("/admin/financeiro/grupos?msg=Status atualizado", 303)
 
 
 @router.get("/admin/financeiro/contas", response_class=HTMLResponse)

@@ -1,25 +1,74 @@
-{% extends "base.html" %}{% block title %}Grupos e subgrupos{% endblock %}{% block content %}
-<div class="page-head"><div><h1>Grupos e subgrupos</h1><p class="muted">Organize o plano de contas em dois níveis para facilitar filtros, relatórios e classificação automática.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
+{% extends "base.html" %}{% block title %}Plano de contas{% endblock %}{% block content %}
+<div class="page-head"><div><h1>Plano de contas</h1><p class="muted">Cada subgrupo pertence a um único grupo. Nos lançamentos você escolhe apenas o subgrupo; o grupo é preenchido automaticamente.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
+{% if message %}<div class="success">{{message}}</div>{% endif %}
 
-<div class="grid two">
-  <form method="post" class="card stack"><h2>Novo grupo principal</h2>
+<div class="card plan-toolbar">
+  <div class="plan-toolbar-row">
+    <label class="grow">Buscar grupo ou subgrupo<input id="plan-search" placeholder="Digite para localizar..."></label>
+    <button type="button" class="button" id="toggle-new-group">+ Novo grupo</button>
+  </div>
+  <form method="post" class="plan-new-group" id="new-group-form" style="display:none">
     <input type="hidden" name="parent_id" value="">
     <label>Nome do grupo<input name="name" required placeholder="Ex.: Despesas de pessoal"></label>
-    <label>Natureza<select name="nature"><option value="income">Entrada</option><option value="expense" selected>Saída</option><option value="transfer">Transferência</option></select></label>
-    <button class="primary">Adicionar grupo</button>
-  </form>
-  <form method="post" class="card stack"><h2>Novo subgrupo</h2>
-    <label>Grupo principal<select name="parent_id" required><option value="">Selecione...</option>{% for g in parents if g.active and g.nature!='transfer' %}<option value="{{g.id}}">{{g.name}}</option>{% endfor %}</select></label>
-    <label>Nome do subgrupo<input name="name" required placeholder="Ex.: Pró-labore"></label>
-    <input type="hidden" name="nature" value="expense">
-    <button class="primary">Adicionar subgrupo</button>
+    <label>Natureza<select name="nature"><option value="income">Entrada</option><option value="expense" selected>Saída</option></select></label>
+    <div class="form-actions"><button class="primary">Adicionar grupo</button><button type="button" class="button" id="cancel-new-group">Cancelar</button></div>
   </form>
 </div>
 
-<div class="card"><h2>Plano de contas</h2><div class="table-wrap"><table><thead><tr><th>Grupo principal</th><th>Subgrupo</th><th>Natureza</th><th>Status</th><th></th></tr></thead><tbody>
-{% for p in parents %}
-<tr><td><strong>{{p.name}}</strong></td><td>-</td><td>{{'Entrada' if p.nature=='income' else ('Saída' if p.nature=='expense' else 'Transferência')}}</td><td>{{'Ativo' if p.active else 'Inativo'}}</td><td><form method="post" action="/admin/financeiro/grupos/{{p.id}}/status"><button class="compact">{{'Desativar' if p.active else 'Ativar'}}</button></form></td></tr>
-{% for g in children_by_parent.get(p.id, []) %}<tr><td>{{p.name}}</td><td><strong>{{g.name}}</strong></td><td>{{'Entrada' if g.nature=='income' else 'Saída'}}</td><td>{{'Ativo' if g.active else 'Inativo'}}</td><td><form method="post" action="/admin/financeiro/grupos/{{g.id}}/status"><button class="compact">{{'Desativar' if g.active else 'Ativar'}}</button></form></td></tr>{% endfor %}
+<div class="plan-grid" id="plan-grid">
+{% for p in parents if p.nature!='transfer' %}
+<section class="card plan-group-card" data-search="{{(p.name ~ ' ' ~ (children_by_parent.get(p.id, [])|map(attribute='name')|join(' ')))|lower}}">
+  <div class="plan-group-head">
+    <div>
+      <div class="plan-title-row"><h2>{{p.name}}</h2><span class="badge {{'open' if p.active else 'pending'}}">{{'Ativo' if p.active else 'Inativo'}}</span></div>
+      <div class="muted">{{'Entrada' if p.nature=='income' else 'Saída'}} · {{children_by_parent.get(p.id, [])|length}} subgrupo(s)</div>
+    </div>
+    <div class="action-row">
+      <button type="button" class="button compact js-edit-group" data-target="edit-group-{{p.id}}">Editar</button>
+      <form method="post" action="/admin/financeiro/grupos/{{p.id}}/status"><button class="compact">{{'Desativar' if p.active else 'Ativar'}}</button></form>
+    </div>
+  </div>
+
+  <form method="post" action="/admin/financeiro/grupos/{{p.id}}/editar" id="edit-group-{{p.id}}" class="plan-inline-edit" style="display:none">
+    <label>Nome do grupo<input name="name" value="{{p.name}}" required></label>
+    <label>Natureza<select name="nature"><option value="income" {% if p.nature=='income' %}selected{% endif %}>Entrada</option><option value="expense" {% if p.nature=='expense' %}selected{% endif %}>Saída</option></select></label>
+    <div class="form-actions"><button class="primary compact">Salvar</button><button type="button" class="button compact js-cancel-edit" data-target="edit-group-{{p.id}}">Cancelar</button></div>
+  </form>
+
+  <div class="plan-subgroups">
+    {% for g in children_by_parent.get(p.id, []) %}
+    <div class="plan-subgroup-row">
+      <div class="plan-subgroup-name"><span class="plan-dot"></span><strong>{{g.name}}</strong>{% if not g.active %}<span class="muted">(inativo)</span>{% endif %}</div>
+      <div class="action-row">
+        <button type="button" class="button compact js-edit-group" data-target="edit-group-{{g.id}}">Editar</button>
+        <form method="post" action="/admin/financeiro/grupos/{{g.id}}/status"><button class="compact">{{'Desativar' if g.active else 'Ativar'}}</button></form>
+      </div>
+    </div>
+    <form method="post" action="/admin/financeiro/grupos/{{g.id}}/editar" id="edit-group-{{g.id}}" class="plan-inline-edit subgroup-edit" style="display:none">
+      <label>Nome do subgrupo<input name="name" value="{{g.name}}" required></label>
+      <div class="form-actions"><button class="primary compact">Salvar</button><button type="button" class="button compact js-cancel-edit" data-target="edit-group-{{g.id}}">Cancelar</button></div>
+    </form>
+    {% else %}<div class="muted empty-subgroups">Nenhum subgrupo cadastrado.</div>{% endfor %}
+  </div>
+
+  <details class="plan-add-subgroup"><summary>+ Adicionar subgrupo em {{p.name}}</summary>
+    <form method="post" class="plan-subgroup-form">
+      <input type="hidden" name="parent_id" value="{{p.id}}"><input type="hidden" name="nature" value="{{p.nature}}">
+      <label>Nome do subgrupo<input name="name" required placeholder="Ex.: Pró-labore"></label>
+      <button class="primary compact">Adicionar</button>
+    </form>
+  </details>
+</section>
 {% endfor %}
-</tbody></table></div></div>
+</div>
+
+<script>
+const search=document.getElementById('plan-search');
+search.addEventListener('input',()=>{ const q=search.value.trim().toLowerCase(); document.querySelectorAll('.plan-group-card').forEach(card=>{card.style.display=!q||card.dataset.search.includes(q)?'block':'none';}); });
+const newForm=document.getElementById('new-group-form');
+document.getElementById('toggle-new-group').addEventListener('click',()=>newForm.style.display='grid');
+document.getElementById('cancel-new-group').addEventListener('click',()=>newForm.style.display='none');
+document.querySelectorAll('.js-edit-group').forEach(btn=>btn.addEventListener('click',()=>{document.getElementById(btn.dataset.target).style.display='grid';}));
+document.querySelectorAll('.js-cancel-edit').forEach(btn=>btn.addEventListener('click',()=>{document.getElementById(btn.dataset.target).style.display='none';}));
+</script>
 {% endblock %}
