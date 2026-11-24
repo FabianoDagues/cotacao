@@ -4,15 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Sistema de Cotação{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v=10">
-  {% block extra_head %}{% endblock %}
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">Sistema de Cotação <small class="app-version">V8</small></div>
+  <div class="brand">Sistema de Cotação</div>
   {% if user %}
   <div class="nav">
-    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/produtos">Produtos</a><a href="/admin/importacao-produtos">Importar produtos</a><a href="/admin/financeiro">Fluxo de caixa</a><a href="/admin/fornecedores">Fornecedores</a><a href="/uso-interno">Uso interno</a>{% elif user.role == 'employee' %}<a href="/uso-interno">Registrar retirada</a><a href="/uso-interno/alterar-senha">Alterar senha</a>{% else %}<a href="/fornecedor">Minhas cotações</a><a href="/fornecedor/alterar-senha">Alterar senha</a>{% endif %}
+    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/fornecedores">Fornecedores</a><a href="/admin/financeiro">Fluxo de caixa</a>{% else %}<a href="/fornecedor">Minhas cotações</a><a href="/fornecedor/alterar-senha">Alterar senha</a>{% endif %}
     <span>{{ user.name }}</span>
     <form action="/logout" method="post"><button class="link-btn">Sair</button></form>
   </div>

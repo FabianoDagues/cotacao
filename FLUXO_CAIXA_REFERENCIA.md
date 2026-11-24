@@ -30,3 +30,10 @@ A primeira versão contém um leitor genérico de XLS/XLSX que procura cabeçalh
 - C6 Bank: perfil pendente de extrato C6 válido.
 
 O reconhecimento de conta própria usa FINANCE_OWN_NAME e FINANCE_OWN_TAX_ID.
+
+## Evolução V7.2
+
+- Grupo e subgrupo passam a ser tratados separadamente nas telas de lançamento, classificação, filtro e relatório.
+- Lançamentos importados podem ser marcados manualmente como transferência entre contas.
+- A importação ignora lançamentos repetidos, inclusive em extratos com períodos sobrepostos.
+- Classificações manuais de extratos alimentam uma memória por conta + descrição para importações futuras.

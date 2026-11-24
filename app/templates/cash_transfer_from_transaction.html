@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Marcar transferência{% endblock %}{% block content %}
+<div class="page-head"><div><h1>Marcar como transferência entre contas</h1><p class="muted">Use quando o extrato não reconheceu automaticamente uma transferência entre seus bancos/caixas.</p></div><a class="button" href="/admin/financeiro">Voltar</a></div>
+<div class="card stack narrow-form">
+  <div><strong>Data:</strong> {{tx.transaction_date.strftime('%d/%m/%Y')}}</div>
+  <div><strong>Conta do lançamento:</strong> {{current_account.name if current_account else tx.account_id}}</div>
+  <div><strong>Descrição:</strong> {{tx.description}}</div>
+  <div><strong>Valor:</strong> R$ {{'%.2f'|format(tx.amount)|replace('.', ',')}}</div>
+  <div class="info">{{'Este valor entrou nesta conta. Selecione de qual outra conta ele saiu.' if tx.transaction_type=='income' else 'Este valor saiu desta conta. Selecione em qual outra conta ele entrou.'}}</div>
+  <form method="post" class="stack">
+    <label>{{'Conta de origem' if tx.transaction_type=='income' else 'Conta de destino'}}
+      <select name="other_account_id" required><option value="">Selecione...</option>{% for a in accounts if a.id!=tx.account_id %}<option value="{{a.id}}">{{a.name}}</option>{% endfor %}</select>
+    </label>
+    <div class="form-actions"><button class="primary">Confirmar transferência</button><a class="button" href="/admin/financeiro">Cancelar</a></div>
+  </form>
+</div>
+{% endblock %}

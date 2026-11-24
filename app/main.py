@@ -22,12 +22,14 @@ from openpyxl import load_workbook, Workbook
 from .db import Base, engine, get_db, SessionLocal
 from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem
 from .security import hash_password, verify_password
+from .finance import router as finance_router, seed_finance_defaults
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Sistema de Cotação")
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "troque-esta-chave-em-producao"), https_only=os.getenv("COOKIE_SECURE", "0") == "1")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+app.include_router(finance_router)
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Sao_Paulo")
 
 def now_local() -> datetime:
@@ -77,19 +79,6 @@ def ensure_runtime_schema():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE quote_suppliers ADD COLUMN submitted_at TIMESTAMP NULL"))
 
-    # create_all cria tabelas novas, mas não acrescenta colunas às já existentes.
-    # Bancos antigos não registravam o administrador que gerou o link.
-    if "password_reset_tokens" in tables:
-        reset_columns = {column["name"] for column in inspector.get_columns("password_reset_tokens")}
-        if "created_by_user_id" not in reset_columns:
-            with engine.begin() as conn:
-                optional_clause = "IF NOT EXISTS " if engine.dialect.name == "postgresql" else ""
-                conn.execute(text(
-                    "ALTER TABLE password_reset_tokens ADD COLUMN "
-                    f"{optional_clause}created_by_user_id INTEGER NULL "
-                    "REFERENCES users(id) ON DELETE SET NULL"
-                ))
-
 
 def backfill_submission_status():
     """Preserva o status de cotações respondidas antes da atualização que criou submitted_at."""
@@ -106,7 +95,7 @@ def backfill_submission_status():
                     QuoteResponse.quote_item_id.in_(item_ids),
                 )
             ).all()
-            if responses and {r.quote_item_id for r in responses} == set(item_ids):
+            if responses:
                 link.submitted_at = max((r.updated_at for r in responses if r.updated_at), default=now_local())
                 changed = True
         if changed:
@@ -132,12 +121,12 @@ def startup():
     Base.metadata.create_all(bind=engine)
     backfill_submission_status()
     seed_admin()
-    seed_finance_defaults(SessionLocal)
+    seed_finance_defaults()
 
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "version": "8.0"}
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -145,8 +134,6 @@ def home(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
     if not user:
         return RedirectResponse("/login", 303)
-    if user.role == "employee":
-        return RedirectResponse("/uso-interno/alterar-senha" if user.must_change_password else "/uso-interno", 303)
     if user.role == "supplier" and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
@@ -165,8 +152,6 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["role"] = user.role
-    if user.role == "employee":
-        return RedirectResponse("/uso-interno/alterar-senha" if user.must_change_password else "/uso-interno", 303)
     if user.role == "supplier" and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
     return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
@@ -471,15 +456,15 @@ def create_quote(
     title: str = Form(...),
     deadline: str = Form(...),
     suppliers: list[int] = Form(default=[]),
-    product_file: Optional[UploadFile] = File(None),
+    product_file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     user = require_role(request, db, "admin")
     all_suppliers = db.scalars(select(User).where(and_(User.role == "supplier", User.active == True)).order_by(User.company_name)).all()
     try:
         deadline_dt = datetime.fromisoformat(deadline)
-        rows = read_product_rows(product_file) if product_file and product_file.filename else []
-        if product_file and product_file.filename and not rows:
+        rows = read_product_rows(product_file)
+        if not rows:
             raise ValueError("A planilha não contém produtos.")
         if not suppliers:
             raise ValueError("Selecione ao menos um fornecedor.")
@@ -500,7 +485,7 @@ def create_quote(
                 continue
             db.add(QuoteItem(quote_id=quote.id, code=str(code).strip(), description=str(description).strip(), requested_qty=parse_decimal(qty, "1"), base_unit=str(unit or "UN").strip().upper()))
             imported += 1
-        if rows and imported == 0:
+        if imported == 0:
             raise ValueError("Nenhum produto válido encontrado. Use colunas: Código, Produto, Quantidade e Unidade.")
         db.commit()
         return RedirectResponse(f"/admin/cotacoes/{quote.id}", 303)
@@ -1003,19 +988,3 @@ async def supplier_save_quote(quote_id: int, request: Request, db: Session = Dep
         db.rollback()
         raise HTTPException(400, str(exc))
     return RedirectResponse(f"/fornecedor/cotacoes/{quote_id}?salvo=1", 303)
-
-
-from .catalog import router as catalog_router
-app.include_router(catalog_router)
-
-from .internal_use import router as internal_router
-app.include_router(internal_router)
-
-from .importacao import router as import_router
-app.include_router(import_router)
-
-from .finance import router as finance_router, seed_finance_defaults
-app.include_router(finance_router)
-
-from .finance_reports import router as finance_reports_router
-app.include_router(finance_reports_router)

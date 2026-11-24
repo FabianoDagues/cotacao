@@ -106,16 +106,6 @@ class PurchaseOrderItem(Base):
     __table_args__ = (UniqueConstraint("order_id", "quote_item_id", name="uq_order_quote_item"),)
 
 
-class Product(Base):
-    __tablename__ = "products"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    barcode: Mapped[str | None] = mapped_column(String(14), unique=True, nullable=True, index=True)
-    description: Mapped[str] = mapped_column(String(255), index=True)
-    base_unit: Mapped[str] = mapped_column(String(40), default="UN")
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
 class CashGroup(Base):
     __tablename__ = "cash_groups"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -174,3 +164,17 @@ class CashTransaction(Base):
     raw_data: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+class CashClassificationRule(Base):
+    __tablename__ = "cash_classification_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("financial_accounts.id", ondelete="CASCADE"), index=True)
+    description_key: Mapped[str] = mapped_column(String(255), index=True)
+    transaction_type: Mapped[str] = mapped_column(String(20), index=True)  # income | expense
+    group_id: Mapped[int] = mapped_column(ForeignKey("cash_groups.id", ondelete="CASCADE"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("account_id", "description_key", "transaction_type", name="uq_cash_rule_account_desc_type"),)
+

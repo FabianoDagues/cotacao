@@ -5,12 +5,11 @@ import os
 import re
 import unicodedata
 import uuid
-from collections import defaultdict, Counter
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, HTTPException
@@ -21,13 +20,13 @@ from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
 from .db import get_db, SessionLocal
-from .account_tree import account_path, descendant_ids
 from .models import (
     User,
     CashGroup,
     FinancialAccount,
     BankStatementImport,
     CashTransaction,
+    CashClassificationRule,
 )
 
 try:
@@ -37,7 +36,6 @@ except Exception:  # pragma: no cover - no Railway será instalado pelo requirem
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
-templates.env.globals["account_path"] = account_path
 router = APIRouter()
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Sao_Paulo")
 
@@ -128,63 +126,95 @@ def total_balance_before(db: Session, before_date: date) -> Decimal:
     return total
 
 
-def seed_finance_defaults(session_factory=SessionLocal):
+def seed_finance_defaults():
     defaults = [
         ("Receitas", "income", None),
         ("Dinheiro", "income", "Receitas"),
-        ("Cartão de crédito", "income", "Receitas"),
-        ("Cartão de débito", "income", "Receitas"),
-        ("Voucher", "income", "Receitas"),
-        ("Pix", "income", "Receitas"),
         ("Cartões recebimento", "income", "Receitas"),
         ("Pix / recebimentos diversos", "income", "Receitas"),
         ("Pagamento de mercadorias", "expense", None),
+        ("Fornecedores / mercadorias", "expense", "Pagamento de mercadorias"),
         ("Despesas de pessoal", "expense", None),
         ("Folha de pagamento", "expense", "Despesas de pessoal"),
+        ("Colaboradores extras", "expense", "Despesas de pessoal"),
+        ("Pró-labore", "expense", "Despesas de pessoal"),
         ("Diárias", "expense", "Despesas de pessoal"),
-        ("INSS", "expense", "Despesas de pessoal"),
-        ("Colaboradores extras / pró-labore / diárias", "expense", "Despesas de pessoal"),
         ("FGTS", "expense", "Despesas de pessoal"),
         ("GPS / INSS", "expense", "Despesas de pessoal"),
-        ("Férias / rescisões / benefícios", "expense", "Despesas de pessoal"),
+        ("Férias", "expense", "Despesas de pessoal"),
+        ("Rescisões", "expense", "Despesas de pessoal"),
+        ("Benefícios", "expense", "Despesas de pessoal"),
         ("Despesas operacionais", "expense", None),
         ("Aluguel", "expense", "Despesas operacionais"),
-        ("Energia / água / gás", "expense", "Despesas operacionais"),
         ("Energia", "expense", "Despesas operacionais"),
         ("Água", "expense", "Despesas operacionais"),
-        ("Telefone", "expense", "Despesas operacionais"),
-        ("Insumos / embalagens", "expense", "Despesas operacionais"),
+        ("Gás", "expense", "Despesas operacionais"),
+        ("Insumos", "expense", "Despesas operacionais"),
+        ("Embalagens", "expense", "Despesas operacionais"),
         ("Manutenção", "expense", "Despesas operacionais"),
-        ("Logística / combustível / veículos", "expense", "Despesas operacionais"),
         ("Logística", "expense", "Despesas operacionais"),
-        ("Transporte", "expense", "Logística"),
-        ("Combustível", "expense", "Logística"),
-        ("Manutenção de veículos", "expense", "Logística"),
-        ("Telefone / Internet", "expense", "Despesas operacionais"),
-        ("Limpeza / segurança / serviços", "expense", "Despesas operacionais"),
+        ("Combustível", "expense", "Despesas operacionais"),
+        ("Veículos", "expense", "Despesas operacionais"),
+        ("Telefone", "expense", "Despesas operacionais"),
+        ("Internet", "expense", "Despesas operacionais"),
+        ("Limpeza", "expense", "Despesas operacionais"),
+        ("Segurança", "expense", "Despesas operacionais"),
+        ("Serviços", "expense", "Despesas operacionais"),
         ("Despesas de marketing", "expense", None),
-        ("Publicidade / cartaz / panfleto / redes sociais", "expense", "Despesas de marketing"),
+        ("Publicidade", "expense", "Despesas de marketing"),
+        ("Cartaz / Panfleto", "expense", "Despesas de marketing"),
+        ("Redes sociais", "expense", "Despesas de marketing"),
         ("Despesas administrativas", "expense", None),
-        ("Software / sistemas", "expense", "Despesas administrativas"),
-        ("Contabilidade / jurídico / associações", "expense", "Despesas administrativas"),
-        ("Material de escritório / TI", "expense", "Despesas administrativas"),
+        ("Software", "expense", "Despesas administrativas"),
+        ("Sistemas", "expense", "Despesas administrativas"),
+        ("Contabilidade", "expense", "Despesas administrativas"),
+        ("Jurídico", "expense", "Despesas administrativas"),
+        ("Associações", "expense", "Despesas administrativas"),
+        ("Material de escritório", "expense", "Despesas administrativas"),
+        ("TI", "expense", "Despesas administrativas"),
         ("Impostos / tributos", "expense", None),
         ("ICMS", "expense", "Impostos / tributos"),
-        ("PIS / COFINS / IRPJ / CSLL / ISS / DAS", "expense", "Impostos / tributos"),
+        ("PIS", "expense", "Impostos / tributos"),
+        ("COFINS", "expense", "Impostos / tributos"),
+        ("IRPJ", "expense", "Impostos / tributos"),
+        ("CSLL", "expense", "Impostos / tributos"),
+        ("ISS", "expense", "Impostos / tributos"),
+        ("DAS", "expense", "Impostos / tributos"),
         ("Investimentos", "expense", None),
-        ("Consórcio / máquinas / energia solar", "expense", "Investimentos"),
+        ("Consórcio", "expense", "Investimentos"),
+        ("Máquinas / equipamentos", "expense", "Investimentos"),
+        ("Energia solar", "expense", "Investimentos"),
         ("Aplicações financeiras", "expense", "Investimentos"),
         ("Empréstimos", "expense", "Investimentos"),
         ("Sócios", "expense", None),
+        ("Retiradas / adiantamentos", "expense", "Sócios"),
         ("Despesas financeiras", "expense", None),
         ("Taxas de cartões", "expense", "Despesas financeiras"),
-        ("Tarifas bancárias / juros", "expense", "Despesas financeiras"),
+        ("Tarifas bancárias", "expense", "Despesas financeiras"),
+        ("Juros bancários", "expense", "Despesas financeiras"),
         ("Perdas", "expense", None),
+        ("Quebras / perdas", "expense", "Perdas"),
         ("Transferências entre contas", "transfer", None),
         ("A classificar - Receitas", "income", None),
         ("A classificar - Despesas", "expense", None),
     ]
-    with session_factory() as db:
+    deprecated_combined = {
+        "Colaboradores extras / pró-labore / diárias",
+        "Férias / rescisões / benefícios",
+        "Energia / água / gás",
+        "Insumos / embalagens",
+        "Logística / combustível / veículos",
+        "Telefone / Internet",
+        "Limpeza / segurança / serviços",
+        "Publicidade / cartaz / panfleto / redes sociais",
+        "Software / sistemas",
+        "Contabilidade / jurídico / associações",
+        "Material de escritório / TI",
+        "PIS / COFINS / IRPJ / CSLL / ISS / DAS",
+        "Consórcio / máquinas / energia solar",
+        "Tarifas bancárias / juros",
+    }
+    with SessionLocal() as db:
         existing = {g.name: g for g in db.scalars(select(CashGroup)).all()}
         for name, nature, parent_name in defaults:
             if name in existing:
@@ -194,6 +224,11 @@ def seed_finance_defaults(session_factory=SessionLocal):
             db.add(g)
             db.flush()
             existing[name] = g
+        # Grupos combinados antigos continuam preservados para o histórico,
+        # mas saem das novas seleções para evitar lançamentos pouco detalhados.
+        for name in deprecated_combined:
+            if name in existing:
+                existing[name].active = False
         if not db.scalar(select(FinancialAccount.id).limit(1)):
             db.add(FinancialAccount(name="Caixa físico", account_type="cash", opening_balance=Decimal("0"), active=True))
         db.commit()
@@ -202,67 +237,98 @@ def seed_finance_defaults(session_factory=SessionLocal):
 def finance_context(db: Session):
     accounts = db.scalars(select(FinancialAccount).order_by(FinancialAccount.account_type, FinancialAccount.name)).all()
     groups = db.scalars(select(CashGroup).order_by(CashGroup.nature, CashGroup.name)).all()
-    group_map = {g.id: g for g in groups}
-    for group in groups:
-        group.display_path = account_path(group, group_map)
-    groups.sort(key=lambda g: g.display_path.casefold())
     balances = {a.id: account_balance(db, a) for a in accounts}
     bank_total = sum((balances[a.id] for a in accounts if a.account_type == "bank" and a.active), Decimal("0"))
     cash_total = sum((balances[a.id] for a in accounts if a.account_type == "cash" and a.active), Decimal("0"))
     return accounts, groups, balances, bank_total, cash_total
 
 
-def filtered_transactions(db: Session, start: date, end: date, account_id: Optional[int], group_id: Optional[int], tx_type: Optional[str]):
+def group_hierarchy(groups):
+    group_map = {g.id: g for g in groups}
+    parents = [g for g in groups if not g.parent_id]
+    children_by_parent = defaultdict(list)
+    for g in groups:
+        if g.parent_id:
+            children_by_parent[g.parent_id].append(g)
+    for values in children_by_parent.values():
+        values.sort(key=lambda x: x.name.lower())
+    return group_map, parents, children_by_parent
+
+
+def group_parts(group_id: Optional[int], group_map):
+    if not group_id or group_id not in group_map:
+        return None, None
+    g = group_map[group_id]
+    if g.parent_id and g.parent_id in group_map:
+        return group_map[g.parent_id], g
+    return g, None
+
+
+def resolve_group_selection(db: Session, parent_id: Optional[int], subgroup_id: Optional[int], expected_nature: str) -> Optional[CashGroup]:
+    if subgroup_id:
+        subgroup = db.get(CashGroup, subgroup_id)
+        if not subgroup or not subgroup.active:
+            raise ValueError("Subgrupo inválido ou inativo.")
+        if parent_id and subgroup.parent_id != parent_id:
+            raise ValueError("O subgrupo não pertence ao grupo selecionado.")
+        if subgroup.nature != expected_nature:
+            raise ValueError("O subgrupo não corresponde ao tipo do lançamento.")
+        return subgroup
+    if not parent_id:
+        return None
+    parent = db.get(CashGroup, parent_id)
+    if not parent or not parent.active or parent.parent_id:
+        raise ValueError("Grupo principal inválido ou inativo.")
+    if parent.nature != expected_nature:
+        raise ValueError("O grupo não corresponde ao tipo do lançamento.")
+    has_children = db.scalar(select(CashGroup.id).where(CashGroup.parent_id == parent.id, CashGroup.active.is_(True)).limit(1))
+    if has_children and not parent.name.startswith("A classificar"):
+        raise ValueError("Selecione também um subgrupo.")
+    return parent
+
+
+def remember_classification_rule(db: Session, tx: CashTransaction, group: CashGroup):
+    if tx.source != "bank_import" or tx.transaction_type not in {"income", "expense"}:
+        return
+    if group.name.startswith("A classificar"):
+        return
+    key = norm_text(tx.description)[:255]
+    if not key:
+        return
+    rule = db.scalar(select(CashClassificationRule).where(
+        CashClassificationRule.account_id == tx.account_id,
+        CashClassificationRule.description_key == key,
+        CashClassificationRule.transaction_type == tx.transaction_type,
+    ))
+    if rule:
+        rule.group_id = group.id
+        rule.active = True
+        rule.updated_at = now_local()
+    else:
+        db.add(CashClassificationRule(
+            account_id=tx.account_id, description_key=key, transaction_type=tx.transaction_type,
+            group_id=group.id, active=True, hits=0, created_at=now_local(), updated_at=now_local()
+        ))
+
+
+def filtered_transactions(
+    db: Session, start: date, end: date, account_id: Optional[int],
+    group_id: Optional[int], subgroup_id: Optional[int], tx_type: Optional[str]
+):
     q = select(CashTransaction).where(CashTransaction.transaction_date >= start, CashTransaction.transaction_date <= end)
     if account_id:
         q = q.where(CashTransaction.account_id == account_id)
-    if group_id:
-        groups = {g.id: g for g in db.scalars(select(CashGroup))}
-        q = q.where(CashTransaction.group_id.in_(descendant_ids(group_id, groups)))
+    if subgroup_id:
+        q = q.where(CashTransaction.group_id == subgroup_id)
+    elif group_id:
+        child_ids = list(db.scalars(select(CashGroup.id).where(CashGroup.parent_id == group_id)).all())
+        q = q.where(CashTransaction.group_id.in_([group_id] + child_ids))
     if tx_type:
         if tx_type == "transfer":
             q = q.where(CashTransaction.transaction_type.in_(["transfer_in", "transfer_out"]))
         else:
             q = q.where(CashTransaction.transaction_type == tx_type)
     return db.scalars(q.order_by(CashTransaction.transaction_date.desc(), CashTransaction.id.desc())).all()
-
-
-
-def transaction_return_url(tx: CashTransaction, return_query: str = "", message: str = "", db: Optional[Session] = None) -> str:
-    """Retorna ao lançamento, respeitando os filtros que ainda o incluem."""
-    query = parse_qs((return_query or "").lstrip("?"), keep_blank_values=False)
-
-    def field(name: str) -> str:
-        return query.get(name, [""])[0]
-
-    day = tx.transaction_date
-    start = parse_date_value(field("inicio")) or day.replace(day=1)
-    end = parse_date_value(field("fim")) or day
-    if start > end:
-        start, end = day.replace(day=1), day
-    # Se a data mudou na edição, o lançamento não deve sumir do período filtrado.
-    start, end = min(start, day), max(end, day)
-    params = {"inicio": start.isoformat(), "fim": end.isoformat()}
-
-    if field("conta").isdigit() and int(field("conta")) == tx.account_id:
-        params["conta"] = str(tx.account_id)
-
-    if field("grupo").isdigit() and tx.group_id:
-        selected_group = int(field("grupo"))
-        if selected_group == tx.group_id:
-            params["grupo"] = str(selected_group)
-        elif db is not None:
-            groups = {g.id: g for g in db.scalars(select(CashGroup)).all()}
-            if tx.group_id in descendant_ids(selected_group, groups):
-                params["grupo"] = str(selected_group)
-
-    selected_type = field("tipo")
-    if selected_type == tx.transaction_type or (selected_type == "transfer" and tx.transaction_type in {"transfer_in", "transfer_out"}):
-        params["tipo"] = selected_type
-
-    if message:
-        params["msg"] = message
-    return f"/admin/financeiro?{urlencode(params)}#lancamento-{tx.id}"
 
 
 def summarize_transactions(transactions):
@@ -293,6 +359,22 @@ def summarize_transactions(transactions):
     return entries, expenses, transfers_in, transfers_out, daily, group_totals
 
 
+def build_group_rows(group_totals, group_map):
+    rows = []
+    for gid, values in group_totals.items():
+        if gid not in group_map:
+            continue
+        parent, subgroup = group_parts(gid, group_map)
+        rows.append({
+            "group": parent,
+            "subgroup": subgroup,
+            **values,
+            "net": values["income"] - values["expense"],
+        })
+    rows.sort(key=lambda x: (x["group"].name if x["group"] else "", x["subgroup"].name if x["subgroup"] else ""))
+    return rows
+
+
 @router.get("/admin/financeiro", response_class=HTMLResponse)
 def cashflow_page(
     request: Request,
@@ -300,6 +382,7 @@ def cashflow_page(
     fim: Optional[str] = None,
     conta: Optional[int] = None,
     grupo: Optional[int] = None,
+    subgrupo: Optional[int] = None,
     tipo: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -309,9 +392,9 @@ def cashflow_page(
     end = parse_date_value(fim) if fim else today
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
-    txs = filtered_transactions(db, start, end, conta, grupo, tipo)
+    txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
-    group_map = {g.id: g for g in groups}
+    group_map, parent_groups, children_by_parent = group_hierarchy(groups)
     account_map = {a.id: a for a in accounts}
     entries, expenses, transfer_in, transfer_out, daily, group_totals = summarize_transactions(txs)
     opening = total_balance_before(db, start)
@@ -321,17 +404,14 @@ def cashflow_page(
         net = daily[d]["income"] - daily[d]["expense"]
         running += net
         daily_rows.append({"date": d, **daily[d], "net": net, "running": running})
-    group_rows = []
-    for gid, values in group_totals.items():
-        g = group_map.get(gid)
-        if g:
-            group_rows.append({"group": g, **values, "net": values["income"] - values["expense"]})
-    group_rows.sort(key=lambda x: abs(x["net"]), reverse=True)
+    group_rows = build_group_rows(group_totals, group_map)
     return templates.TemplateResponse(request, "cashflow.html", {
         "user": user,
         "transactions": txs,
         "accounts": accounts,
         "groups": groups,
+        "parent_groups": parent_groups,
+        "children_by_parent": children_by_parent,
         "balances": balances,
         "bank_total": bank_total,
         "cash_total": cash_total,
@@ -349,11 +429,11 @@ def cashflow_page(
         "end": end,
         "selected_account": conta,
         "selected_group": grupo,
+        "selected_subgroup": subgrupo,
         "selected_type": tipo or "",
-        "return_query": urlencode({k: v for k, v in {
-            "inicio": start.isoformat(), "fim": end.isoformat(),
-            "conta": conta, "grupo": grupo, "tipo": tipo,
-        }.items() if v is not None and v != ""}),
+        "today": today,
+        "last7": today - timedelta(days=6),
+        "month_start": today.replace(day=1),
         "message": request.query_params.get("msg"),
     })
 
@@ -365,6 +445,7 @@ def cashflow_print(
     fim: str,
     conta: Optional[int] = None,
     grupo: Optional[int] = None,
+    subgrupo: Optional[int] = None,
     tipo: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
@@ -372,9 +453,9 @@ def cashflow_print(
     start, end = parse_date_value(inicio), parse_date_value(fim)
     if not start or not end or start > end:
         raise HTTPException(400, "Período inválido")
-    txs = filtered_transactions(db, start, end, conta, grupo, tipo)
+    txs = filtered_transactions(db, start, end, conta, grupo, subgrupo, tipo)
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
-    group_map = {g.id: g for g in groups}
+    group_map, _, _ = group_hierarchy(groups)
     account_map = {a.id: a for a in accounts}
     entries, expenses, _, _, daily, group_totals = summarize_transactions(txs)
     opening = total_balance_before(db, start)
@@ -384,11 +465,7 @@ def cashflow_print(
         net = daily[d]["income"] - daily[d]["expense"]
         running += net
         daily_rows.append({"date": d, **daily[d], "net": net, "running": running})
-    group_rows = []
-    for gid, values in group_totals.items():
-        if gid in group_map:
-            group_rows.append({"group": group_map[gid], **values, "net": values["income"] - values["expense"]})
-    group_rows.sort(key=lambda x: abs(x["net"]), reverse=True)
+    group_rows = build_group_rows(group_totals, group_map)
     return templates.TemplateResponse(request, "cashflow_print.html", {
         "user": user, "transactions": txs, "start": start, "end": end,
         "entries": entries, "expenses": expenses, "result": entries-expenses,
@@ -399,10 +476,16 @@ def cashflow_print(
 
 
 @router.get("/admin/financeiro/lancamentos/novo", response_class=HTMLResponse)
-def cash_transaction_new(request: Request, db: Session = Depends(get_db)):
+def cash_transaction_new(request: Request, tipo: Optional[str] = None, db: Session = Depends(get_db)):
     user = require_admin(request, db)
     accounts, groups, _, _, _ = finance_context(db)
-    return templates.TemplateResponse(request, "cash_transaction_form.html", {"user": user, "accounts": accounts, "groups": groups, "tx": None, "today": now_local().date(), "error": None})
+    group_map, parent_groups, _ = group_hierarchy(groups)
+    initial_type = tipo if tipo in {"income", "expense", "transfer"} else "expense"
+    return templates.TemplateResponse(request, "cash_transaction_form.html", {
+        "user": user, "accounts": accounts, "groups": groups, "group_map": group_map,
+        "parent_groups": parent_groups, "tx": None, "today": now_local().date(), "error": None,
+        "initial_type": initial_type, "selected_parent_id": None, "selected_subgroup_id": None,
+    })
 
 
 @router.post("/admin/financeiro/lancamentos/novo", response_class=HTMLResponse)
@@ -413,6 +496,7 @@ def cash_transaction_create(
     account_id: int = Form(...),
     destination_account_id: Optional[int] = Form(None),
     group_id: Optional[int] = Form(None),
+    subgroup_id: Optional[int] = Form(None),
     description: str = Form(...),
     amount: str = Form(...),
     counterparty: str = Form(""),
@@ -422,6 +506,7 @@ def cash_transaction_create(
 ):
     user = require_admin(request, db)
     accounts, groups, _, _, _ = finance_context(db)
+    group_map, parent_groups, _ = group_hierarchy(groups)
     try:
         d = parse_date_value(transaction_date)
         value = abs(parse_money(amount))
@@ -432,20 +517,23 @@ def cash_transaction_create(
                 raise ValueError("Selecione uma conta de destino diferente da conta de origem.")
             transfer_group = db.scalar(select(CashGroup).where(CashGroup.name == "Transferências entre contas"))
             ref = uuid.uuid4().hex
-            db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type="transfer_out", amount=value, account_id=account_id, group_id=transfer_group.id if transfer_group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="transfer", transfer_ref=ref, created_by_user_id=user.id, reconciled=True))
-            db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type="transfer_in", amount=value, account_id=destination_account_id, group_id=transfer_group.id if transfer_group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="transfer", transfer_ref=ref, created_by_user_id=user.id, reconciled=True))
+            common = dict(transaction_date=d, description=description.strip(), amount=value, group_id=transfer_group.id if transfer_group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="transfer", transfer_ref=ref, created_by_user_id=user.id, reconciled=True)
+            db.add(CashTransaction(transaction_type="transfer_out", account_id=account_id, **common))
+            db.add(CashTransaction(transaction_type="transfer_in", account_id=destination_account_id, **common))
         else:
             if transaction_type not in {"income", "expense"}:
                 raise ValueError("Tipo de lançamento inválido.")
-            group = db.get(CashGroup, group_id) if group_id else None
-            if group and group.nature not in {transaction_type, "transfer"}:
-                raise ValueError("O grupo escolhido não corresponde ao tipo do lançamento.")
-            db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type=transaction_type, amount=value, account_id=account_id, group_id=group_id or None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="manual", created_by_user_id=user.id, reconciled=True))
+            group = resolve_group_selection(db, group_id, subgroup_id, transaction_type)
+            db.add(CashTransaction(transaction_date=d, description=description.strip(), transaction_type=transaction_type, amount=value, account_id=account_id, group_id=group.id if group else None, counterparty=counterparty.strip() or None, document_number=document_number.strip() or None, notes=notes.strip() or None, source="manual", created_by_user_id=user.id, reconciled=True))
         db.commit()
         return RedirectResponse("/admin/financeiro?msg=Lançamento salvo", 303)
     except Exception as exc:
         db.rollback()
-        return templates.TemplateResponse(request, "cash_transaction_form.html", {"user": user, "accounts": accounts, "groups": groups, "tx": None, "today": now_local().date(), "error": str(exc)}, status_code=400)
+        return templates.TemplateResponse(request, "cash_transaction_form.html", {
+            "user": user, "accounts": accounts, "groups": groups, "group_map": group_map,
+            "parent_groups": parent_groups, "tx": None, "today": now_local().date(), "error": str(exc),
+            "initial_type": transaction_type, "selected_parent_id": group_id, "selected_subgroup_id": subgroup_id,
+        }, status_code=400)
 
 
 @router.get("/admin/financeiro/lancamentos/{tx_id}/editar", response_class=HTMLResponse)
@@ -454,17 +542,17 @@ def cash_transaction_edit_page(tx_id: int, request: Request, db: Session = Depen
     tx = db.get(CashTransaction, tx_id)
     if not tx:
         raise HTTPException(404, "Lançamento não encontrado")
-    if tx.source == "daily_total":
-        return RedirectResponse(f"/admin/financeiro/totais-diarios?account_id={tx.account_id}&day={tx.transaction_date}", 303)
     if tx.transfer_ref:
         raise HTTPException(400, "Transferências devem ser excluídas e lançadas novamente.")
     accounts, groups, _, _, _ = finance_context(db)
-    return_query = request.url.query
+    group_map, parent_groups, _ = group_hierarchy(groups)
+    parent, subgroup = group_parts(tx.group_id, group_map)
     return templates.TemplateResponse(request, "cash_transaction_form.html", {
-        "user": user, "accounts": accounts, "groups": groups, "tx": tx,
-        "today": now_local().date(), "error": None,
-        "return_query": return_query,
-        "return_url": transaction_return_url(tx, return_query, db=db),
+        "user": user, "accounts": accounts, "groups": groups, "group_map": group_map,
+        "parent_groups": parent_groups, "tx": tx, "today": now_local().date(), "error": None,
+        "initial_type": tx.transaction_type,
+        "selected_parent_id": parent.id if parent else None,
+        "selected_subgroup_id": subgroup.id if subgroup else None,
     })
 
 
@@ -472,41 +560,94 @@ def cash_transaction_edit_page(tx_id: int, request: Request, db: Session = Depen
 def cash_transaction_edit(
     tx_id: int, request: Request,
     transaction_date: str = Form(...), transaction_type: str = Form(...), account_id: int = Form(...),
-    group_id: Optional[int] = Form(None), description: str = Form(...), amount: str = Form(...),
+    group_id: Optional[int] = Form(None), subgroup_id: Optional[int] = Form(None), description: str = Form(...), amount: str = Form(...),
     counterparty: str = Form(""), document_number: str = Form(""), notes: str = Form(""), reconciled: Optional[str] = Form(None),
-    return_query: str = Form(""), db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     require_admin(request, db)
     tx = db.get(CashTransaction, tx_id)
     if not tx or tx.transfer_ref:
         raise HTTPException(404, "Lançamento não encontrado ou não editável")
-    if tx.source == "daily_total":
-        return RedirectResponse(f"/admin/financeiro/totais-diarios?account_id={tx.account_id}&day={tx.transaction_date}", 303)
     d = parse_date_value(transaction_date); value = abs(parse_money(amount))
     if not d or value <= 0 or transaction_type not in {"income", "expense"}:
         raise HTTPException(400, "Dados inválidos")
-    tx.transaction_date=d; tx.transaction_type=transaction_type; tx.account_id=account_id; tx.group_id=group_id or None
+    try:
+        group = resolve_group_selection(db, group_id, subgroup_id, transaction_type)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    tx.transaction_date=d; tx.transaction_type=transaction_type; tx.account_id=account_id; tx.group_id=group.id if group else None
     tx.description=description.strip(); tx.amount=value; tx.counterparty=counterparty.strip() or None
     tx.document_number=document_number.strip() or None; tx.notes=notes.strip() or None; tx.reconciled=reconciled == "1"
+    if group:
+        remember_classification_rule(db, tx, group)
     db.commit()
-    return RedirectResponse(transaction_return_url(tx, return_query, "Lançamento alterado", db), 303)
+    return RedirectResponse("/admin/financeiro?msg=Lançamento alterado", 303)
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/classificar")
 def cash_transaction_classify(
-    tx_id: int, request: Request, group_id: int = Form(...),
-    return_query: str = Form(""), db: Session = Depends(get_db),
+    tx_id: int, request: Request, group_id: int = Form(...), subgroup_id: Optional[int] = Form(None), db: Session = Depends(get_db)
 ):
     require_admin(request, db)
-    tx = db.get(CashTransaction, tx_id); group = db.get(CashGroup, group_id)
-    if not tx or not group:
+    tx = db.get(CashTransaction, tx_id)
+    if not tx or tx.transaction_type not in {"income", "expense"}:
         raise HTTPException(404)
-    expected = "income" if tx.transaction_type in {"income", "transfer_in"} else "expense"
-    if group.nature not in {expected, "transfer"}:
-        raise HTTPException(400, "Grupo incompatível com o lançamento")
+    try:
+        group = resolve_group_selection(db, group_id, subgroup_id, tx.transaction_type)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not group:
+        raise HTTPException(400, "Selecione grupo e subgrupo.")
     tx.group_id = group.id; tx.reconciled = True
+    remember_classification_rule(db, tx, group)
     db.commit()
-    return RedirectResponse(transaction_return_url(tx, return_query, "Lançamento classificado", db), 303)
+    return RedirectResponse("/admin/financeiro?msg=Lançamento classificado e regra lembrada para próximas importações", 303)
+
+
+@router.get("/admin/financeiro/lancamentos/{tx_id}/transferencia", response_class=HTMLResponse)
+def cash_transaction_transfer_page(tx_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_admin(request, db)
+    tx = db.get(CashTransaction, tx_id)
+    if not tx or tx.transfer_ref or tx.transaction_type not in {"income", "expense"}:
+        raise HTTPException(404, "Lançamento não disponível para conversão em transferência")
+    accounts = db.scalars(select(FinancialAccount).where(FinancialAccount.active.is_(True)).order_by(FinancialAccount.name)).all()
+    current_account = db.get(FinancialAccount, tx.account_id)
+    return templates.TemplateResponse(request, "cash_transfer_from_transaction.html", {
+        "user": user, "tx": tx, "accounts": accounts, "current_account": current_account, "error": None
+    })
+
+
+@router.post("/admin/financeiro/lancamentos/{tx_id}/transferencia", response_class=HTMLResponse)
+def cash_transaction_transfer_submit(tx_id: int, request: Request, other_account_id: int = Form(...), db: Session = Depends(get_db)):
+    user = require_admin(request, db)
+    tx = db.get(CashTransaction, tx_id)
+    if not tx or tx.transfer_ref or tx.transaction_type not in {"income", "expense"}:
+        raise HTTPException(404, "Lançamento não disponível para conversão em transferência")
+    other = db.get(FinancialAccount, other_account_id)
+    if not other or not other.active or other.id == tx.account_id:
+        raise HTTPException(400, "Selecione outra conta financeira.")
+    transfer_group = db.scalar(select(CashGroup).where(CashGroup.name == "Transferências entre contas"))
+    ref = uuid.uuid4().hex
+    current_is_in = tx.transaction_type == "income"
+    tx.transaction_type = "transfer_in" if current_is_in else "transfer_out"
+    tx.group_id = transfer_group.id if transfer_group else None
+    tx.transfer_ref = ref
+    tx.reconciled = True
+    counterpart = CashTransaction(
+        transaction_date=tx.transaction_date,
+        description=tx.description,
+        transaction_type="transfer_out" if current_is_in else "transfer_in",
+        amount=tx.amount,
+        account_id=other.id,
+        group_id=transfer_group.id if transfer_group else None,
+        counterparty=tx.counterparty,
+        document_number=tx.document_number,
+        notes=f"Contrapartida automática da transferência do lançamento #{tx.id}. Será conciliada quando o extrato da outra conta for importado.",
+        source="transfer", transfer_ref=ref, reconciled=False, created_by_user_id=user.id,
+    )
+    db.add(counterpart)
+    db.commit()
+    return RedirectResponse("/admin/financeiro?msg=Transferência registrada entre as contas", 303)
 
 
 @router.post("/admin/financeiro/lancamentos/{tx_id}/excluir")
@@ -527,33 +668,33 @@ def cash_transaction_delete(tx_id: int, request: Request, db: Session = Depends(
 def cash_groups_page(request: Request, db: Session = Depends(get_db)):
     user = require_admin(request, db)
     groups = db.scalars(select(CashGroup).order_by(CashGroup.nature, CashGroup.name)).all()
-    group_map = {group.id: group for group in groups}
-    children = defaultdict(list)
-    for group in groups:
-        group.display_path = account_path(group, group_map)
-        children[group.parent_id if group.parent_id in group_map else None].append(group)
-    groups.sort(key=lambda group: group.display_path.casefold())
+    group_map, parents, children_by_parent = group_hierarchy(groups)
     return templates.TemplateResponse(request, "cash_groups.html", {
-        "user": user, "groups": groups, "children": children, "error": None})
+        "user": user, "groups": groups, "group_map": group_map, "parents": parents,
+        "children_by_parent": children_by_parent, "error": None
+    })
 
 
 @router.post("/admin/financeiro/grupos")
-def cash_group_create(request: Request, name: str = Form(...), nature: str = Form(...), parent_id: Optional[int] = Form(None), db: Session = Depends(get_db)):
+def cash_group_create(
+    request: Request, name: str = Form(...), nature: str = Form("expense"),
+    parent_id: Optional[int] = Form(None), db: Session = Depends(get_db)
+):
     require_admin(request, db)
-    if nature not in {"income", "expense", "transfer"}:
-        raise HTTPException(400)
-    name = ' '.join(name.split())
-    if not name or len(name) > 160:
-        raise HTTPException(400, "Informe um nome com até 160 caracteres.")
-    if parent_id:
-        parent = db.get(CashGroup, parent_id)
-        if not parent or not parent.active:
-            raise HTTPException(400, "Selecione um grupo superior ativo.")
-        if parent.nature != nature:
-            raise HTTPException(400, "A natureza deve ser igual à do grupo superior.")
-    if db.scalar(select(CashGroup).where(func.lower(CashGroup.name) == name.strip().lower())):
-        raise HTTPException(400, "Já existe um grupo com esse nome")
-    db.add(CashGroup(name=name.strip(), nature=nature, parent_id=parent_id or None, active=True)); db.commit()
+    clean_name = name.strip()
+    if not clean_name:
+        raise HTTPException(400, "Informe o nome.")
+    if db.scalar(select(CashGroup).where(func.lower(CashGroup.name) == clean_name.lower())):
+        raise HTTPException(400, "Já existe um grupo ou subgrupo com esse nome")
+    parent = db.get(CashGroup, parent_id) if parent_id else None
+    if parent_id and (not parent or parent.parent_id):
+        raise HTTPException(400, "Grupo principal inválido")
+    if parent:
+        nature = parent.nature
+    elif nature not in {"income", "expense", "transfer"}:
+        raise HTTPException(400, "Natureza inválida")
+    db.add(CashGroup(name=clean_name, nature=nature, parent_id=parent.id if parent else None, active=True))
+    db.commit()
     return RedirectResponse("/admin/financeiro/grupos", 303)
 
 
@@ -602,8 +743,7 @@ TAXID_ALIASES = {"cnpj/cpf", "cpf/cnpj", "cnpj cpf", "cpf cnpj", "cnpj", "cpf"}
 BANK_PROFILE_LABELS = {
     "itau": "Itaú",
     "sicoob": "Sicoob",
-    "c6": "C6 Bank",
-    "nubank": "Nubank",
+    "c6": "C6 Bank (perfil ainda não calibrado)",
     "generic": "Genérico",
 }
 
@@ -618,8 +758,6 @@ def normalize_tax_id(value) -> str:
 
 def profile_from_bank_name(bank_name: Optional[str]) -> str:
     bank = norm_text(bank_name)
-    if "nubank" in bank or "nu pagamentos" in bank:
-        return "nubank"
     if "itau" in bank:
         return "itau"
     if "sicoob" in bank:
@@ -668,6 +806,86 @@ def is_own_party(item) -> bool:
     return bool(FINANCE_OWN_NAME and FINANCE_OWN_NAME in text)
 
 
+def learned_classification_for_item(db: Session, account: FinancialAccount, item: dict):
+    signed = Decimal(item["signed_amount"])
+    tx_type = "income" if signed > 0 else "expense"
+    key = norm_text(item.get("description"))[:255]
+    if not key:
+        return None
+    rule = db.scalar(select(CashClassificationRule).where(
+        CashClassificationRule.account_id == account.id,
+        CashClassificationRule.description_key == key,
+        CashClassificationRule.transaction_type == tx_type,
+        CashClassificationRule.active.is_(True),
+    ))
+    if not rule:
+        return None
+    group = db.get(CashGroup, rule.group_id)
+    if not group or not group.active or group.nature != tx_type:
+        return None
+    rule.hits = int(rule.hits or 0) + 1
+    rule.updated_at = now_local()
+    return {
+        "transaction_type": tx_type,
+        "group_id": group.id,
+        "group_name": group.name,
+        "reconciled": True,
+        "rule": "classificacao_aprendida",
+    }
+
+
+def existing_imported_transaction(db: Session, account_id: int, item: dict):
+    signed = Decimal(item["signed_amount"])
+    amount = abs(signed)
+    candidates = db.scalars(select(CashTransaction).where(
+        CashTransaction.account_id == account_id,
+        CashTransaction.transaction_date == item["date"],
+        CashTransaction.amount == amount,
+        CashTransaction.source == "bank_import",
+    )).all()
+    desc = norm_text(item.get("description"))
+    counterparty = norm_text(item.get("counterparty"))
+    document = norm_text(item.get("document"))
+    tax_id = normalize_tax_id(item.get("tax_id"))
+    for tx in candidates:
+        if norm_text(tx.description) != desc:
+            continue
+        if norm_text(tx.counterparty) != counterparty:
+            continue
+        if norm_text(tx.document_number) != document:
+            continue
+        if tax_id:
+            try:
+                raw = json.loads(tx.raw_data or "{}")
+            except Exception:
+                raw = {}
+            existing_tax = normalize_tax_id(raw.get("tax_id"))
+            if existing_tax and existing_tax != tax_id:
+                continue
+        # O sinal precisa coincidir, aceitando transferências já reconhecidas.
+        positive_types = {"income", "transfer_in"}
+        existing_positive = tx.transaction_type in positive_types
+        if existing_positive != (signed > 0):
+            continue
+        return tx
+    return None
+
+
+def synthetic_transfer_match(db: Session, account_id: int, item: dict):
+    signed = Decimal(item["signed_amount"])
+    expected_type = "transfer_in" if signed > 0 else "transfer_out"
+    candidates = db.scalars(select(CashTransaction).where(
+        CashTransaction.account_id == account_id,
+        CashTransaction.transaction_date == item["date"],
+        CashTransaction.amount == abs(signed),
+        CashTransaction.transaction_type == expected_type,
+        CashTransaction.source == "transfer",
+        CashTransaction.reconciled.is_(False),
+        CashTransaction.transfer_ref.is_not(None),
+    )).all()
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def classify_statement_item(profile: str, item: dict) -> dict:
     signed = Decimal(item["signed_amount"])
     desc = norm_text(item.get("description"))
@@ -685,16 +903,6 @@ def classify_statement_item(profile: str, item: dict) -> dict:
             "rule": "transferencia_conta_propria",
         }
 
-    if positive:
-        if any(name in full for name in ("voucher", "vale alimentacao", "vale refeicao")):
-            return {"transaction_type":"income","group_name":"Voucher","reconciled":True,"rule":"voucher_identificado"}
-        if "recebimento rede" in desc or "redecard" in counterparty or desc.startswith("cabal"):
-            if "debito" in desc:
-                return {"transaction_type":"income","group_name":"Cartão de débito","reconciled":True,"rule":"cartao_debito_identificado"}
-            if "credito" in desc:
-                return {"transaction_type":"income","group_name":"Cartão de crédito","reconciled":True,"rule":"cartao_credito_identificado"}
-        if any(word in desc for word in ("pix receb", "recebida pelo pix", "pix qr code recebido")):
-            return {"transaction_type":"income","group_name":"Pix","reconciled":True,"rule":"pix_recebido"}
     if profile == "itau":
         if positive and ("recebimento rede" in desc or desc.startswith("cabal caba") or "redecard" in counterparty):
             return {"transaction_type":"income","group_name":"Cartões recebimento","reconciled":True,"rule":"itau_cartoes"}
@@ -703,9 +911,9 @@ def classify_statement_item(profile: str, item: dict) -> dict:
         if positive and desc == "recebimentos":
             return {"transaction_type":"income","group_name":"Pix / recebimentos diversos","reconciled":True,"rule":"itau_recebimentos"}
         if not positive and "vivo" in full:
-            return {"transaction_type":"expense","group_name":"Telefone / Internet","reconciled":True,"rule":"itau_vivo"}
+            return {"transaction_type":"expense","group_name":"Telefone","reconciled":True,"rule":"itau_vivo"}
         if not positive and any(x in full for x in ("tarifa", "juros", "encargo", "iof")):
-            return {"transaction_type":"expense","group_name":"Tarifas bancárias / juros","reconciled":True,"rule":"itau_tarifas"}
+            return {"transaction_type":"expense","group_name":"Tarifas bancárias","reconciled":True,"rule":"itau_tarifas"}
         if not positive and ("emprestimo" in full or "financiamento" in full):
             return {"transaction_type":"expense","group_name":"Empréstimos","reconciled":True,"rule":"itau_emprestimo"}
         # BOLETO PAGO pode ser mercadoria, serviço, imposto etc.; não forçar grupo.
@@ -721,7 +929,7 @@ def classify_statement_item(profile: str, item: dict) -> dict:
         if positive and "pix receb" in desc:
             return {"transaction_type":"income","group_name":"Pix / recebimentos diversos","reconciled":True,"rule":"sicoob_pix_recebido"}
         if not positive and ("deb pacote servicos" in desc or "pacote servicos" in desc or "tarifa" in full):
-            return {"transaction_type":"expense","group_name":"Tarifas bancárias / juros","reconciled":True,"rule":"sicoob_tarifas"}
+            return {"transaction_type":"expense","group_name":"Tarifas bancárias","reconciled":True,"rule":"sicoob_tarifas"}
         if not positive and "emprestimo" in full:
             return {"transaction_type":"expense","group_name":"Empréstimos","reconciled":True,"rule":"sicoob_emprestimo"}
         if not positive and ("pix.emit" in desc or "pagamento pix" in full):
@@ -731,7 +939,7 @@ def classify_statement_item(profile: str, item: dict) -> dict:
     if positive and "pix receb" in desc:
         return {"transaction_type":"income","group_name":"Pix / recebimentos diversos","reconciled":True,"rule":"generic_pix_recebido"}
     if not positive and any(x in full for x in ("tarifa", "juros banc", "pacote servicos")):
-        return {"transaction_type":"expense","group_name":"Tarifas bancárias / juros","reconciled":True,"rule":"generic_tarifa"}
+        return {"transaction_type":"expense","group_name":"Tarifas bancárias","reconciled":True,"rule":"generic_tarifa"}
     return {
         "transaction_type": "income" if positive else "expense",
         "group_name": "A classificar - Receitas" if positive else "A classificar - Despesas",
@@ -852,27 +1060,37 @@ def bank_import_page(request:Request, db:Session=Depends(get_db)):
     user=require_admin(request,db)
     accounts=db.scalars(select(FinancialAccount).where(FinancialAccount.account_type=="bank").order_by(FinancialAccount.name)).all()
     imports=db.scalars(select(BankStatementImport).order_by(BankStatementImport.imported_at.desc()).limit(20)).all()
+    rules=db.scalars(select(CashClassificationRule).where(CashClassificationRule.active.is_(True)).order_by(CashClassificationRule.updated_at.desc()).limit(100)).all()
+    groups=db.scalars(select(CashGroup)).all()
     account_map={a.id:a for a in accounts}
+    group_map={g.id:g for g in groups}
     account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name), "Genérico") for a in accounts}
-    return templates.TemplateResponse(request,"bank_import.html",{"user":user,"accounts":accounts,"imports":imports,"account_map":account_map,"account_profiles":account_profiles,"error":None,"message":request.query_params.get("msg")})
+    return templates.TemplateResponse(request,"bank_import.html",{
+        "user":user,"accounts":accounts,"imports":imports,"rules":rules,"account_map":account_map,"group_map":group_map,
+        "account_profiles":account_profiles,"error":None,"message":request.query_params.get("msg")
+    })
+
+
+@router.post("/admin/financeiro/regras/{rule_id}/excluir")
+def classification_rule_delete(rule_id:int, request:Request, db:Session=Depends(get_db)):
+    require_admin(request,db)
+    rule=db.get(CashClassificationRule,rule_id)
+    if not rule:
+        raise HTTPException(404)
+    db.delete(rule); db.commit()
+    return RedirectResponse("/admin/financeiro/importar?msg=Regra de classificação removida",303)
 
 
 @router.post("/admin/financeiro/importar", response_class=HTMLResponse)
-async def bank_import_submit(request:Request, account_id:int=Form(...), statement:UploadFile=File(...), pdf_password:str=Form(""), db:Session=Depends(get_db)):
-    user=require_admin(request,db); account=db.scalar(select(FinancialAccount).where(FinancialAccount.id==account_id).with_for_update())
+async def bank_import_submit(request:Request, account_id:int=Form(...), statement:UploadFile=File(...), db:Session=Depends(get_db)):
+    user=require_admin(request,db); account=db.get(FinancialAccount,account_id)
     if not account or account.account_type!="bank": raise HTTPException(400,"Selecione uma conta bancária")
     content=await statement.read(); file_hash=hashlib.sha256(content).hexdigest()
     if db.scalar(select(BankStatementImport).where(BankStatementImport.financial_account_id==account.id,BankStatementImport.file_hash==file_hash)):
-        return RedirectResponse("/admin/financeiro/importar?msg=Este extrato já foi importado",303)
+        return RedirectResponse("/admin/financeiro/importar?msg=Este arquivo de extrato já foi importado. Nenhum lançamento foi duplicado",303)
     try:
-        pdf_data = None
-        if (statement.filename or "").lower().endswith(".pdf"):
-            from .pdf_statements import parse_pdf
-            pdf_data = parse_pdf(content, pdf_password)
-            file_profile = pdf_data["profile"]
-        else:
-            matrix=read_statement_matrix(statement.filename or "extrato.xlsx",content)
-            file_profile=detect_bank_profile(matrix, None)
+        matrix=read_statement_matrix(statement.filename or "extrato.xlsx",content)
+        file_profile=detect_bank_profile(matrix, None)
         account_profile=profile_from_bank_name(account.bank_name)
         if file_profile != "generic" and account_profile != "generic" and file_profile != account_profile:
             raise ValueError(
@@ -881,7 +1099,7 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
                 "Selecione a conta correta ou confira o arquivo antes de importar."
             )
         profile=file_profile if file_profile != "generic" else account_profile
-        rows=pdf_data["rows"] if pdf_data else parse_statement_rows(matrix)
+        rows=parse_statement_rows(matrix)
         groups_by_name={g.name:g for g in db.scalars(select(CashGroup)).all()}
         batch=BankStatementImport(
             financial_account_id=account.id,
@@ -893,28 +1111,43 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
         )
         db.add(batch); db.flush()
         existing_tx_count=db.scalar(select(func.count(CashTransaction.id)).where(CashTransaction.account_id==account.id)) or 0
-        imported=0; auto_classified=0; signed_sum=Decimal("0"); last_balance=None; last_balance_date=None
-        occurrences = Counter()
+        imported=0; auto_classified=0; learned_count=0; duplicates=0; matched_transfers=0
+        signed_sum=Decimal("0"); last_balance=None; last_balance_date=None
         for item in rows:
-            signed=item["signed_amount"]; balance=item["balance"]
-            key_source=f'{account.id}|{item["date"]}|{norm_text(item["description"])}|{norm_text(item.get("counterparty"))}|{normalize_tax_id(item.get("tax_id"))}|{signed}|{item["document"] or ""}|{balance if balance is not None else ""}'
-            if pdf_data:
-                occurrences[key_source] += 1
-                if occurrences[key_source] > 1:
-                    key_source += f'|ocorrencia:{occurrences[key_source]}'
+            signed=Decimal(item["signed_amount"]); balance=item["balance"]
+            key_source=f'{account.id}|{item["date"]}|{norm_text(item["description"])}|{norm_text(item.get("counterparty"))}|{normalize_tax_id(item.get("tax_id"))}|{signed}|{norm_text(item["document"] or "")}'
             import_key=hashlib.sha256(key_source.encode("utf-8")).hexdigest()
-            if db.scalar(select(CashTransaction.id).where(CashTransaction.import_key==import_key)): continue
-            cls=classify_statement_item(profile,item)
-            if cls["transaction_type"] == "income":
-                daily_total = db.scalar(select(CashTransaction.id).where(
-                    CashTransaction.account_id == account.id,
-                    CashTransaction.transaction_date == item["date"],
-                    CashTransaction.source == "daily_total",
-                ).limit(1))
-                if daily_total:
-                    raise ValueError(f'Existem totais diários em {item["date"]:%d/%m/%Y} nesta conta. Zere esses totais antes de importar os mesmos recebimentos pelo extrato.')
-            group=groups_by_name.get(cls["group_name"])
-            raw_payload={"profile":profile,"rule":cls["rule"],"tax_id":item.get("tax_id"),"row":item["raw"]}
+
+            # Proteção em dois níveis: chave estável e comparação do lançamento já importado.
+            if db.scalar(select(CashTransaction.id).where(CashTransaction.import_key==import_key)) or existing_imported_transaction(db, account.id, item):
+                duplicates += 1
+                if balance is not None and (last_balance_date is None or item["date"]>=last_balance_date):
+                    last_balance=balance; last_balance_date=item["date"]
+                continue
+
+            raw_payload={"profile":profile,"tax_id":item.get("tax_id"),"row":item["raw"]}
+
+            # Se uma transferência foi criada manualmente pelo outro lado, concilia em vez de duplicar.
+            synthetic=synthetic_transfer_match(db, account.id, item)
+            if synthetic:
+                synthetic.description=item["description"]
+                synthetic.counterparty=item.get("counterparty")
+                synthetic.document_number=item["document"]
+                synthetic.source="bank_import"
+                synthetic.bank_import_id=batch.id
+                synthetic.import_key=import_key
+                synthetic.reconciled=True
+                raw_payload["rule"]="contrapartida_transferencia_manual"
+                synthetic.raw_data=json.dumps(raw_payload,default=str,ensure_ascii=False)
+                matched_transfers += 1
+                if balance is not None and (last_balance_date is None or item["date"]>=last_balance_date):
+                    last_balance=balance; last_balance_date=item["date"]
+                continue
+
+            learned=learned_classification_for_item(db, account, item)
+            cls=learned or classify_statement_item(profile,item)
+            group=db.get(CashGroup,cls.get("group_id")) if cls.get("group_id") else groups_by_name.get(cls["group_name"])
+            raw_payload["rule"]=cls["rule"]
             tx=CashTransaction(
                 transaction_date=item["date"],
                 description=item["description"],
@@ -933,30 +1166,29 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
             )
             db.add(tx)
             imported+=1; signed_sum+=signed
-            if cls["reconciled"]: auto_classified+=1
+            if learned:
+                learned_count += 1
+            if cls["reconciled"]:
+                auto_classified+=1
             if balance is not None and (last_balance_date is None or item["date"]>=last_balance_date): last_balance=balance; last_balance_date=item["date"]
         db.flush()
         linked=link_pending_internal_transfers(db)
-        batch.rows_count=imported
-        if pdf_data and imported:
-            last_balance = pdf_data["final"]
-            last_balance_date = pdf_data["balance_date"]
-            if existing_tx_count == 0 and Decimal(account.opening_balance or 0) == 0:
-                if pdf_data["opening"] is not None:
-                    account.opening_balance = pdf_data["opening"]
-                elif last_balance is not None:
-                    account.opening_balance = last_balance - sum((r["signed_amount"] for r in rows), Decimal("0"))
-        if last_balance is not None and (account.last_statement_date is None or last_balance_date >= account.last_statement_date):
+        batch.rows_count=imported + matched_transfers
+        if last_balance is not None:
             account.last_statement_balance=last_balance; account.last_statement_date=last_balance_date
-            if not pdf_data and existing_tx_count==0 and Decimal(account.opening_balance or 0)==0:
+            if existing_tx_count==0 and Decimal(account.opening_balance or 0)==0:
                 account.opening_balance=last_balance-signed_sum
         db.commit()
         profile_label=BANK_PROFILE_LABELS.get(profile,profile)
-        msg=f"{imported} lançamentos importados ({profile_label}); {auto_classified} classificados automaticamente"
-        if pdf_data and pdf_data["warnings"]:
-            msg += "; " + " ".join(pdf_data["warnings"])
-        if pdf_data and pdf_data["final"] is None:
-            msg += "; saldo calculado pelo saldo inicial cadastrado e pelos lançamentos. Confira o saldo inicial da conta"
+        msg=f"{imported} novos lançamentos importados ({profile_label})"
+        if auto_classified:
+            msg += f"; {auto_classified} classificados automaticamente"
+        if learned_count:
+            msg += f" ({learned_count} pela memória de classificação)"
+        if duplicates:
+            msg += f"; {duplicates} duplicado(s) ignorado(s)"
+        if matched_transfers:
+            msg += f"; {matched_transfers} contrapartida(s) de transferência conciliada(s)"
         if linked:
             msg += f"; {linked} transferência(s) entre contas vinculada(s)"
         return RedirectResponse(f"/admin/financeiro/importar?msg={msg}",303)
@@ -964,7 +1196,12 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
         db.rollback()
         accounts=db.scalars(select(FinancialAccount).where(FinancialAccount.account_type=="bank").order_by(FinancialAccount.name)).all()
         imports=db.scalars(select(BankStatementImport).order_by(BankStatementImport.imported_at.desc()).limit(20)).all()
-        account_map={a.id:a for a in accounts}
+        rules=db.scalars(select(CashClassificationRule).where(CashClassificationRule.active.is_(True)).order_by(CashClassificationRule.updated_at.desc()).limit(100)).all()
+        groups=db.scalars(select(CashGroup)).all()
+        account_map={a.id:a for a in accounts}; group_map={g.id:g for g in groups}
         account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name), "Genérico") for a in accounts}
-        return templates.TemplateResponse(request,"bank_import.html",{"user":user,"accounts":accounts,"imports":imports,"account_map":account_map,"account_profiles":account_profiles,"error":str(exc),"message":None},status_code=400)
+        return templates.TemplateResponse(request,"bank_import.html",{
+            "user":user,"accounts":accounts,"imports":imports,"rules":rules,"account_map":account_map,"group_map":group_map,
+            "account_profiles":account_profiles,"error":str(exc),"message":None
+        },status_code=400)
 
