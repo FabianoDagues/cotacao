@@ -457,8 +457,10 @@ def cashflow_page(
     running = opening
     for d in sorted(daily):
         net = daily[d]["income"] - daily[d]["expense"]
-        running += net
-        daily_rows.append({"date": d, **daily[d], "net": net, "running": running})
+        movement = net + daily[d]["transfer"]
+        running += movement
+        daily_rows.append({"date": d, **daily[d], "net": net, "movement": movement, "running": running})
+    period_movement = entries + transfer_in - expenses - transfer_out
     group_rows = build_group_rows(group_totals, group_map)
     return_params = [("inicio", start.isoformat()), ("fim", end.isoformat())]
     if account_id:
@@ -482,9 +484,12 @@ def cashflow_page(
         "consolidated": bank_total + cash_total,
         "entries": entries,
         "expenses": expenses,
+        "transfer_in": transfer_in,
+        "transfer_out": transfer_out,
         "result": entries - expenses,
+        "period_movement": period_movement,
         "opening": opening,
-        "period_end_balance": opening + entries - expenses,
+        "period_end_balance": opening + period_movement,
         "daily_rows": daily_rows,
         "group_rows": group_rows,
         "group_map": group_map,
@@ -529,19 +534,22 @@ def cashflow_print(
     accounts, groups, balances, bank_total, cash_total = finance_context(db)
     group_map, _, _ = group_hierarchy(groups)
     account_map = {a.id: a for a in accounts}
-    entries, expenses, _, _, daily, group_totals = summarize_transactions(txs)
+    entries, expenses, transfer_in, transfer_out, daily, group_totals = summarize_transactions(txs)
     opening = total_balance_before(db, start, account_id)
     running = opening
     daily_rows = []
     for d in sorted(daily):
         net = daily[d]["income"] - daily[d]["expense"]
-        running += net
-        daily_rows.append({"date": d, **daily[d], "net": net, "running": running})
+        movement = net + daily[d]["transfer"]
+        running += movement
+        daily_rows.append({"date": d, **daily[d], "net": net, "movement": movement, "running": running})
+    period_movement = entries + transfer_in - expenses - transfer_out
     group_rows = build_group_rows(group_totals, group_map)
     return templates.TemplateResponse(request, "cashflow_print.html", {
         "user": user, "transactions": txs, "start": start, "end": end,
-        "entries": entries, "expenses": expenses, "result": entries-expenses,
-        "opening": opening, "period_end_balance": opening+entries-expenses,
+        "entries": entries, "expenses": expenses, "transfer_in": transfer_in, "transfer_out": transfer_out,
+        "result": entries-expenses, "period_movement": period_movement,
+        "opening": opening, "period_end_balance": opening+period_movement,
         "bank_total": bank_total, "cash_total": cash_total, "consolidated": bank_total+cash_total,
         "group_map": group_map, "account_map": account_map, "daily_rows": daily_rows, "group_rows": group_rows,
     })

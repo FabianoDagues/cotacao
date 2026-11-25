@@ -51,10 +51,13 @@
     <div class="finance-summary-card"><span>Saldo bancário</span><strong>R$ {{ '%.2f'|format(bank_total)|replace('.', ',') }}</strong></div>
     <div class="finance-summary-card"><span>Caixa físico</span><strong>R$ {{ '%.2f'|format(cash_total)|replace('.', ',') }}</strong></div>
     <div class="finance-summary-card accent"><span>Saldo consolidado</span><strong>R$ {{ '%.2f'|format(consolidated)|replace('.', ',') }}</strong></div>
-    <div class="finance-summary-card income"><span>Entradas</span><strong>R$ {{ '%.2f'|format(entries)|replace('.', ',') }}</strong></div>
-    <div class="finance-summary-card expense"><span>Saídas</span><strong>R$ {{ '%.2f'|format(expenses)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card income"><span>Receitas</span><strong>R$ {{ '%.2f'|format(entries)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card expense"><span>Despesas</span><strong>R$ {{ '%.2f'|format(expenses)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card"><span>Transf. recebidas</span><strong class="positive">R$ {{ '%.2f'|format(transfer_in)|replace('.', ',') }}</strong></div>
+    <div class="finance-summary-card"><span>Transf. enviadas</span><strong class="negative">R$ {{ '%.2f'|format(transfer_out)|replace('.', ',') }}</strong></div>
     <div class="finance-summary-card"><span>Resultado</span><strong class="{{ 'positive' if result >= 0 else 'negative' }}">R$ {{ '%.2f'|format(result)|replace('.', ',') }}</strong></div>
   </div>
+  <div class="finance-transfer-note muted">Receitas e despesas não incluem transferências internas. As transferências alteram o saldo da conta, mas não alteram o resultado do negócio.</div>
 
   <section class="finance-grid-panel" id="lancamentos">
     <div class="finance-grid-head">
@@ -125,14 +128,22 @@
       </tbody></table></div>
     </section>
     <section class="finance-grid-panel">
-      <div class="finance-grid-head"><div><h2>Resumo do período</h2><span class="muted">Movimentação sem transferências internas.</span></div></div>
-      <div class="finance-period-summary"><div><span>Saldo inicial</span><strong>R$ {{'%.2f'|format(opening)|replace('.', ',')}}</strong></div><div><span>Entradas</span><strong class="positive">R$ {{'%.2f'|format(entries)|replace('.', ',')}}</strong></div><div><span>Saídas</span><strong class="negative">R$ {{'%.2f'|format(expenses)|replace('.', ',')}}</strong></div><div><span>Saldo final</span><strong>R$ {{'%.2f'|format(period_end_balance)|replace('.', ',')}}</strong></div></div>
+      <div class="finance-grid-head"><div><h2>Resumo do período</h2><span class="muted">Resultado separado da movimentação que altera o saldo da conta.</span></div></div>
+      <div class="finance-period-summary">
+        <div><span>Saldo inicial</span><strong>R$ {{'%.2f'|format(opening)|replace('.', ',')}}</strong></div>
+        <div><span>Receitas</span><strong class="positive">R$ {{'%.2f'|format(entries)|replace('.', ',')}}</strong></div>
+        <div><span>Despesas</span><strong class="negative">R$ {{'%.2f'|format(expenses)|replace('.', ',')}}</strong></div>
+        <div><span>Transf. recebidas</span><strong class="positive">R$ {{'%.2f'|format(transfer_in)|replace('.', ',')}}</strong></div>
+        <div><span>Transf. enviadas</span><strong class="negative">R$ {{'%.2f'|format(transfer_out)|replace('.', ',')}}</strong></div>
+        <div><span>Movimento líquido</span><strong class="{{ 'positive' if period_movement >= 0 else 'negative' }}">R$ {{'%.2f'|format(period_movement)|replace('.', ',')}}</strong></div>
+        <div><span>Saldo final</span><strong>R$ {{'%.2f'|format(period_end_balance)|replace('.', ',')}}</strong></div>
+      </div>
     </section>
   </div>
 
   <section class="finance-grid-panel" id="diario">
     <div class="finance-grid-head"><div><h2>Resumo diário</h2><span class="muted">Resultado e saldo acumulado por data.</span></div></div>
-    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Entradas</th><th>Saídas</th><th>Resultado do dia</th><th>Saldo acumulado</th></tr></thead><tbody>{% for r in daily_rows %}<tr><td>{{r.date.strftime('%d/%m/%Y')}}</td><td class="money positive">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money negative">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td><td class="money"><strong>R$ {{'%.2f'|format(r.running)|replace('.', ',')}}</strong></td></tr>{% else %}<tr><td colspan="5" class="muted">Sem movimentação no período.</td></tr>{% endfor %}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Receitas</th><th>Despesas</th><th>Transferências</th><th>Resultado</th><th>Movimento do saldo</th><th>Saldo acumulado</th></tr></thead><tbody>{% for r in daily_rows %}<tr><td>{{r.date.strftime('%d/%m/%Y')}}</td><td class="money positive">R$ {{'%.2f'|format(r.income)|replace('.', ',')}}</td><td class="money negative">R$ {{'%.2f'|format(r.expense)|replace('.', ',')}}</td><td class="money {{ 'positive' if r.transfer >= 0 else 'negative' }}">R$ {{'%.2f'|format(r.transfer)|replace('.', ',')}}</td><td class="money">R$ {{'%.2f'|format(r.net)|replace('.', ',')}}</td><td class="money {{ 'positive' if r.movement >= 0 else 'negative' }}">R$ {{'%.2f'|format(r.movement)|replace('.', ',')}}</td><td class="money"><strong>R$ {{'%.2f'|format(r.running)|replace('.', ',')}}</strong></td></tr>{% else %}<tr><td colspan="7" class="muted">Sem movimentação no período.</td></tr>{% endfor %}</tbody></table></div>
   </section>
 
   <section class="finance-grid-panel" id="categorias">

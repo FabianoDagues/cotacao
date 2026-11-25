@@ -1,2 +1,1 @@
-Sistema de Cotação V7.5 - Fluxo de Caixa
-Correção de filtros e preservação da consulta após edição
+Sistema de Cotação V7.6 - Fluxo de Caixa
