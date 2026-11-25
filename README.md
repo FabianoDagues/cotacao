@@ -123,3 +123,6 @@ A classificação financeira passou a exigir somente o subgrupo/categoria. O gru
 
 ## V7.8
 Correção da leitura dos PDFs C6 e Sicoob. Consulte README_ATUALIZACAO_V7_8.md.
+
+## V7.9
+Menu lateral, central de pedidos e registro independente de baixas. Consulte README_ATUALIZACAO_V7_9.md.

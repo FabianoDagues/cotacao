@@ -178,3 +178,22 @@ class CashClassificationRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     __table_args__ = (UniqueConstraint("account_id", "description_key", "transaction_type", name="uq_cash_rule_account_desc_type"),)
 
+
+
+class ProductWriteOff(Base):
+    """Registro independente de baixas; não altera cotações nem saldos financeiros."""
+    __tablename__ = "product_write_offs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    movement_date: Mapped[date] = mapped_column(Date, index=True)
+    code: Mapped[str] = mapped_column(String(80), default="")
+    description: Mapped[str] = mapped_column(String(255))
+    unit: Mapped[str] = mapped_column(String(40))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    reason: Mapped[str] = mapped_column(String(80))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

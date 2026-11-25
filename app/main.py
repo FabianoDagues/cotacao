@@ -4,7 +4,7 @@ import os
 import unicodedata
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from pathlib import Path
 from typing import Optional
@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, Depends, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -20,7 +22,7 @@ from sqlalchemy.orm import Session, selectinload
 from openpyxl import load_workbook, Workbook
 
 from .db import Base, engine, get_db, SessionLocal
-from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem
+from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff
 from .security import hash_password, verify_password
 from .finance import router as finance_router, seed_finance_defaults
 
@@ -59,6 +61,22 @@ def require_role(request: Request, db: Session, role: str) -> User:
     if not user or not user.active or user.role != role:
         raise HTTPException(status_code=403, detail="Acesso negado")
     return user
+
+
+@app.exception_handler(StarletteHTTPException)
+async def browser_http_error(request: Request, exc: StarletteHTTPException):
+    # APIs continuam retornando seus códigos/JSON. Para navegação HTML, informar o motivo.
+    if exc.status_code not in (403, 404) or "text/html" not in request.headers.get("accept", ""):
+        return await http_exception_handler(request, exc)
+    with SessionLocal() as db:
+        user = current_user(request, db)
+        if not user or not user.active:
+            if exc.status_code == 403:
+                request.session.clear()
+                return RedirectResponse("/login?sessao=expirada", 303)
+            user = None
+        message = exc.detail if isinstance(exc.detail, str) else "Não foi possível abrir esta página."
+        return templates.TemplateResponse(request, "access_error.html", {"user": user, "status": exc.status_code, "message": message}, status_code=exc.status_code)
 
 
 def ensure_runtime_schema():
@@ -132,7 +150,8 @@ def healthz():
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    if not user:
+    if not user or not user.active:
+        request.session.clear()
         return RedirectResponse("/login", 303)
     if user.role == "supplier" and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
@@ -141,7 +160,7 @@ def home(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": None})
+    return templates.TemplateResponse(request, "login.html", {"error": "Sua sessão expirou ou não está ativa. Entre novamente." if request.query_params.get("sessao") == "expirada" else None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -988,3 +1007,134 @@ async def supplier_save_quote(quote_id: int, request: Request, db: Session = Dep
         db.rollback()
         raise HTTPException(400, str(exc))
     return RedirectResponse(f"/fornecedor/cotacoes/{quote_id}?salvo=1", 303)
+
+
+@app.get("/admin/pedidos", response_class=HTMLResponse)
+def admin_orders(request: Request, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    quotes = db.scalars(select(Quote).order_by(Quote.created_at.desc())).all()
+    selected = request.query_params.get("cotacao", "")
+    query = select(QuoteSupplier, Quote, User, PurchaseOrder).join(Quote, Quote.id == QuoteSupplier.quote_id).join(User, User.id == QuoteSupplier.supplier_id).outerjoin(PurchaseOrder, and_(PurchaseOrder.quote_id == QuoteSupplier.quote_id, PurchaseOrder.supplier_id == QuoteSupplier.supplier_id))
+    if selected.isdigit():
+        query = query.where(Quote.id == int(selected))
+    rows = db.execute(query.order_by(Quote.created_at.desc(), User.company_name, User.name)).all()
+    return templates.TemplateResponse(request, "admin_orders.html", {"user": user, "quotes": quotes, "selected": selected, "rows": rows})
+
+
+WRITE_OFF_REASONS = ["Vencimento", "Avaria", "Quebra / perda", "Consumo interno", "Doação", "Furto / extravio", "Devolução", "Ajuste de estoque", "Outros"]
+
+
+def write_off_values(form):
+    try:
+        day = date.fromisoformat(str(form.get("movement_date", "")))
+    except ValueError:
+        raise ValueError("Informe uma data válida.")
+    description = str(form.get("description", "")).strip()
+    code = str(form.get("code", "")).strip()
+    unit = str(form.get("unit", "")).strip().upper()
+    reason = str(form.get("reason", ""))
+    notes = str(form.get("notes", "")).strip()
+    if not description or len(description) > 255 or len(code) > 80 or not unit or len(unit) > 40 or len(notes) > 4000:
+        raise ValueError("Confira os dados do produto e os limites dos campos.")
+    if reason not in WRITE_OFF_REASONS:
+        raise ValueError("Selecione um motivo de baixa válido.")
+    quantity = parse_decimal(form.get("quantity"))
+    cost_raw = str(form.get("unit_cost", "")).strip()
+    cost = parse_decimal(cost_raw) if cost_raw else None
+    for number in (quantity, cost):
+        if number is not None and (not number.is_finite() or number < 0 or number >= Decimal("10000000000") or number != number.quantize(Decimal("0.0001"))):
+            raise ValueError("Informe valores válidos com até quatro casas decimais.")
+    if quantity <= 0:
+        raise ValueError("A quantidade precisa ser maior que zero.")
+    return dict(movement_date=day, code=code, description=description, unit=unit, quantity=quantity, unit_cost=cost, reason=reason, notes=notes or None)
+
+
+def render_write_off_form(request, db, user, row=None, values=None, error=None):
+    data = values if values is not None else ({key: getattr(row, key) for key in ("movement_date", "code", "description", "unit", "quantity", "unit_cost", "reason", "notes")} if row else {"movement_date": now_local().date().isoformat(), "unit": "UN"})
+    # Sugestões de produtos anteriormente cotados, sem depender de cadastro de estoque.
+    products = db.execute(select(QuoteItem.code, QuoteItem.description, QuoteItem.base_unit).distinct().order_by(QuoteItem.description).limit(1500)).all()
+    return templates.TemplateResponse(request, "product_write_off_form.html", {"user": user, "row": row, "values": data, "reasons": WRITE_OFF_REASONS, "products": [list(p) for p in products], "error": error}, status_code=400 if error else 200)
+
+
+@app.get("/admin/baixas", response_class=HTMLResponse)
+def product_write_offs(request: Request, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    today = now_local().date()
+    start = request.query_params.get("inicio", today.replace(day=1).isoformat())
+    end = request.query_params.get("fim", today.isoformat())
+    reason = request.query_params.get("motivo", "")
+    search = request.query_params.get("busca", "").strip()[:255]
+    show_cancelled = request.query_params.get("canceladas") == "1"
+    query = select(ProductWriteOff)
+    error = None
+    try:
+        if start and end and date.fromisoformat(start) > date.fromisoformat(end):
+            raise ValueError()
+        if start: query = query.where(ProductWriteOff.movement_date >= date.fromisoformat(start))
+        if end: query = query.where(ProductWriteOff.movement_date <= date.fromisoformat(end))
+    except ValueError:
+        error = "Período inválido. Confira as datas."
+    if not show_cancelled: query = query.where(ProductWriteOff.cancelled_at.is_(None))
+    if reason in WRITE_OFF_REASONS: query = query.where(ProductWriteOff.reason == reason)
+    if search: query = query.where((ProductWriteOff.description.icontains(search, autoescape=True)) | (ProductWriteOff.code.icontains(search, autoescape=True)))
+    rows = [] if error else db.scalars(query.order_by(ProductWriteOff.movement_date.desc(), ProductWriteOff.id.desc())).all()
+    active = [r for r in rows if not r.cancelled_at]
+    cost_total = sum((r.quantity * r.unit_cost for r in active if r.unit_cost is not None), Decimal("0"))
+    return templates.TemplateResponse(request, "product_write_offs.html", {"user": user, "rows": rows, "start": start, "end": end, "reason": reason, "search": search, "show_cancelled": show_cancelled, "reasons": WRITE_OFF_REASONS, "error": error, "cost_total": cost_total, "missing_cost": sum(r.unit_cost is None for r in active), "active_count": len(active)})
+
+
+@app.get("/admin/baixas/nova", response_class=HTMLResponse)
+def product_write_off_new(request: Request, db: Session = Depends(get_db)):
+    return render_write_off_form(request, db, require_role(request, db, "admin"))
+
+
+@app.post("/admin/baixas/nova", response_class=HTMLResponse)
+async def product_write_off_create(request: Request, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    form = await request.form()
+    try:
+        data = write_off_values(form)
+    except (ValueError, InvalidOperation) as exc:
+        return render_write_off_form(request, db, user, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
+    db.add(ProductWriteOff(**data, created_by_user_id=user.id))
+    db.commit()
+    day = data["movement_date"].isoformat()
+    return RedirectResponse(f"/admin/baixas?inicio={day}&fim={day}", 303)
+
+
+@app.get("/admin/baixas/{row_id}/editar", response_class=HTMLResponse)
+def product_write_off_edit(request: Request, row_id: int, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    row = db.get(ProductWriteOff, row_id)
+    if not row: raise HTTPException(404, "Baixa não encontrada.")
+    if row.cancelled_at: raise HTTPException(403, "Uma baixa cancelada não pode ser editada.")
+    return render_write_off_form(request, db, user, row=row)
+
+
+@app.post("/admin/baixas/{row_id}/editar", response_class=HTMLResponse)
+async def product_write_off_update(request: Request, row_id: int, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    row = db.scalar(select(ProductWriteOff).where(ProductWriteOff.id == row_id).with_for_update())
+    if not row: raise HTTPException(404, "Baixa não encontrada.")
+    if row.cancelled_at: raise HTTPException(403, "Uma baixa cancelada não pode ser editada.")
+    form = await request.form()
+    try:
+        data = write_off_values(form)
+    except (ValueError, InvalidOperation) as exc:
+        return render_write_off_form(request, db, user, row=row, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
+    for key, val in data.items(): setattr(row, key, val)
+    db.commit()
+    day = data["movement_date"].isoformat()
+    return RedirectResponse(f"/admin/baixas?inicio={day}&fim={day}", 303)
+
+
+@app.post("/admin/baixas/{row_id}/cancelar")
+def product_write_off_cancel(request: Request, row_id: int, db: Session = Depends(get_db)):
+    user = require_role(request, db, "admin")
+    row = db.scalar(select(ProductWriteOff).where(ProductWriteOff.id == row_id).with_for_update())
+    if not row: raise HTTPException(404, "Baixa não encontrada.")
+    if not row.cancelled_at:
+        row.cancelled_at = datetime.utcnow()
+        row.cancelled_by_user_id = user.id
+        db.commit()
+    return RedirectResponse("/admin/baixas?canceladas=1&inicio=&fim=", 303)

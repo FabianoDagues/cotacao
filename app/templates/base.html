@@ -4,19 +4,42 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Sistema de Cotação{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=79">
 </head>
-<body>
-<header class="topbar">
-  <div class="brand">Sistema de Cotação</div>
-  {% if user %}
-  <div class="nav">
-    {% if user.role == 'admin' %}<a href="/admin">Cotações</a><a href="/admin/fornecedores">Fornecedores</a><a href="/admin/financeiro">Fluxo de caixa</a>{% else %}<a href="/fornecedor">Minhas cotações</a><a href="/fornecedor/alterar-senha">Alterar senha</a>{% endif %}
-    <span>{{ user.name }}</span>
-    <form action="/logout" method="post"><button class="link-btn">Sair</button></form>
-  </div>
-  {% endif %}
-</header>
+<body class="{% if user and user.active %}app-shell{% endif %}">
+{% if user and user.active %}
+{% set path = request.url.path %}
+<aside class="app-sidebar" id="app-sidebar" aria-label="Menu principal">
+  <div class="sidebar-brand"><span class="brand-mark">SC</span><div><strong>Sistema de Cotação</strong><small>Mercado Sanenge</small></div></div>
+  <nav class="sidebar-nav">
+    {% macro item(href, label, glyph, active=false) %}<a href="{{ href }}" class="sidebar-link{% if active %} current{% endif %}" {% if active %}aria-current="page"{% endif %}><span aria-hidden="true" class="sidebar-glyph">{{ glyph }}</span><span>{{ label }}</span></a>{% endmacro %}
+    {% if user.role == 'admin' %}
+      <div class="sidebar-section">Compras</div>
+      {{ item('/admin','Cotações','▤', path == '/admin' or (path.startswith('/admin/cotacoes/') and '/pedidos/' not in path and path != '/admin/cotacoes/nova')) }}
+      {{ item('/admin/cotacoes/nova','Nova cotação','+',path == '/admin/cotacoes/nova') }}
+      {{ item('/admin/pedidos','Pedidos / fechamento','▣',path == '/admin/pedidos' or '/pedidos/' in path) }}
+      {{ item('/admin/fornecedores','Fornecedores','◉',path.startswith('/admin/fornecedores')) }}
+      <div class="sidebar-section">Produtos</div>
+      {{ item('/admin/baixas','Baixa de produtos','↓',path.startswith('/admin/baixas')) }}
+      <div class="sidebar-section">Financeiro</div>
+      {{ item('/admin/financeiro','Fluxo de caixa','▥',path == '/admin/financeiro' or path.startswith('/admin/financeiro/lancamentos/')) }}
+      {{ item('/admin/financeiro/importar','Importar extrato','⇧',path.startswith('/admin/financeiro/importar')) }}
+      {{ item('/admin/financeiro/contas','Bancos e caixa','▰',path.startswith('/admin/financeiro/contas')) }}
+      {{ item('/admin/financeiro/grupos','Plano de contas','≡',path.startswith('/admin/financeiro/grupos')) }}
+    {% elif user.role == 'supplier' %}
+      <div class="sidebar-section">Fornecedor</div>
+      {% if not user.must_change_password %}{{ item('/fornecedor','Minhas cotações','▤',path == '/fornecedor' or path.startswith('/fornecedor/cotacoes/')) }}{% endif %}
+      {{ item('/fornecedor/alterar-senha','Alterar senha','⚿',path == '/fornecedor/alterar-senha') }}
+    {% endif %}
+  </nav>
+  <div class="sidebar-footer"><strong>{{ user.name }}</strong><small>{{ 'Administrador' if user.role == 'admin' else 'Fornecedor' }}</small><form action="/logout" method="post"><button type="submit">Sair</button></form></div>
+</aside>
+<div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+<header class="app-header"><button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Alternar menu lateral" aria-expanded="true" aria-controls="app-sidebar">☰</button><strong>Sistema de Cotação</strong><span>{{ user.name }}</span></header>
+{% else %}<header class="topbar"><div class="brand">Sistema de Cotação</div></header>{% endif %}
 <main class="container">{% block content %}{% endblock %}</main>
+{% if user and user.active %}<script>
+(function(){const body=document.body, button=document.getElementById('sidebar-toggle'), side=document.getElementById('app-sidebar'), backdrop=document.getElementById('sidebar-backdrop'), mobile=window.matchMedia('(max-width: 900px)'); let collapsed=false; try{collapsed=localStorage.getItem('cotacao-menu-recolhido')==='1';}catch(e){} function sync(){const open=mobile.matches?body.classList.contains('sidebar-open'):!body.classList.contains('sidebar-collapsed');button.setAttribute('aria-expanded',String(open));side.inert=!open;backdrop.hidden=!(mobile.matches&&open);} function reset(){body.classList.remove('sidebar-open');body.classList.toggle('sidebar-collapsed',!mobile.matches&&collapsed);sync();} button.addEventListener('click',()=>{if(mobile.matches)body.classList.toggle('sidebar-open');else{collapsed=!collapsed;body.classList.toggle('sidebar-collapsed',collapsed);try{localStorage.setItem('cotacao-menu-recolhido',collapsed?'1':'0');}catch(e){}}sync();});backdrop.addEventListener('click',()=>{body.classList.remove('sidebar-open');sync();button.focus();});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&body.classList.contains('sidebar-open')){body.classList.remove('sidebar-open');sync();button.focus();}});mobile.addEventListener('change',reset);reset();})();
+</script>{% endif %}
 </body>
 </html>
