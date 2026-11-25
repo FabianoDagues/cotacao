@@ -1,10 +1,1 @@
-VERSÃO 7.4 — FLUXO DE CAIXA DESKTOP
-
-Envie para o GitHub os arquivos da pasta app sobre os arquivos atuais e faça o commit.
-Arquivos principais alterados:
-- app/finance.py
-- app/templates/cashflow.html
-- app/templates/cash_transaction_form.html
-- app/static/style.css
-
-Não é necessário recriar o PostgreSQL.
+Atualização V7.8: consulte README_ATUALIZACAO_V7_8.md.

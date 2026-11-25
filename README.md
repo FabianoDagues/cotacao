@@ -120,3 +120,6 @@ O Fluxo de Caixa agora possui grupos e subgrupos separados, transferência manua
 
 ## V7.3 — Plano de contas simplificado
 A classificação financeira passou a exigir somente o subgrupo/categoria. O grupo é vinculado automaticamente. A tela de plano de contas foi redesenhada para edição rápida em cartões.
+
+## V7.8
+Correção da leitura dos PDFs C6 e Sicoob. Consulte README_ATUALIZACAO_V7_8.md.

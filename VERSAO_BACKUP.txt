@@ -1,1 +1,1 @@
-Sistema de Cotação V7.6 - Fluxo de Caixa
+Sistema de Cotação V7.8 - correção importação PDF
