@@ -5,7 +5,7 @@ import os
 import re
 import unicodedata
 import uuid
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
 from .db import get_db, SessionLocal
+from .bank_pdf import read_pdf
 from .models import (
     User,
     CashGroup,
@@ -865,7 +866,7 @@ TAXID_ALIASES = {"cnpj/cpf", "cpf/cnpj", "cnpj cpf", "cpf cnpj", "cnpj", "cpf"}
 BANK_PROFILE_LABELS = {
     "itau": "Itaú",
     "sicoob": "Sicoob",
-    "c6": "C6 Bank (perfil ainda não calibrado)",
+    "c6": "C6 Bank",
     "generic": "Genérico",
 }
 
@@ -1058,7 +1059,7 @@ def classify_statement_item(profile: str, item: dict) -> dict:
             return {"transaction_type":"expense","group_name":"A classificar - Despesas","reconciled":False,"rule":"sicoob_pix_pagamento"}
 
     # Regras seguras, independentes do banco.
-    if positive and "pix receb" in desc:
+    if positive and ("pix receb" in desc or "pix qr code recebido" in desc):
         return {"transaction_type":"income","group_name":"Pix / recebimentos diversos","reconciled":True,"rule":"generic_pix_recebido"}
     if not positive and any(x in full for x in ("tarifa", "juros banc", "pacote servicos")):
         return {"transaction_type":"expense","group_name":"Tarifas bancárias","reconciled":True,"rule":"generic_tarifa"}
@@ -1179,18 +1180,21 @@ def parse_statement_rows(matrix):
 
 @router.get("/admin/financeiro/importar", response_class=HTMLResponse)
 def bank_import_page(request:Request, db:Session=Depends(get_db)):
-    user=require_admin(request,db)
+    return render_bank_import(request, db, require_admin(request,db), message=request.query_params.get("msg"))
+
+
+def render_bank_import(request, db, user, message=None, error=None):
     accounts=db.scalars(select(FinancialAccount).where(FinancialAccount.account_type=="bank").order_by(FinancialAccount.name)).all()
     imports=db.scalars(select(BankStatementImport).order_by(BankStatementImport.imported_at.desc()).limit(20)).all()
     rules=db.scalars(select(CashClassificationRule).where(CashClassificationRule.active.is_(True)).order_by(CashClassificationRule.updated_at.desc()).limit(100)).all()
     groups=db.scalars(select(CashGroup)).all()
     account_map={a.id:a for a in accounts}
     group_map={g.id:g for g in groups}
-    account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name), "Genérico") for a in accounts}
+    account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name or a.name), "Genérico") for a in accounts}
     return templates.TemplateResponse(request,"bank_import.html",{
         "user":user,"accounts":accounts,"imports":imports,"rules":rules,"account_map":account_map,"group_map":group_map,
-        "account_profiles":account_profiles,"error":None,"message":request.query_params.get("msg")
-    })
+        "account_profiles":account_profiles,"error":error,"message":message
+    },status_code=400 if error else 200, headers={"Cache-Control":"no-store"})
 
 
 @router.post("/admin/financeiro/regras/{rule_id}/excluir")
@@ -1203,17 +1207,98 @@ def classification_rule_delete(rule_id:int, request:Request, db:Session=Depends(
     return RedirectResponse("/admin/financeiro/importar?msg=Regra de classificação removida",303)
 
 
+def statement_identity(item):
+    return {"description":norm_text(item.get("description")),"counterparty":norm_text(item.get("counterparty")),
+            "document":norm_text(item.get("document")),"tax_id":normalize_tax_id(item.get("tax_id"))}
+
+
+def plan_statement_import(db, account, rows, pdf_info):
+    start=pdf_info["start"] if pdf_info else min(r["date"] for r in rows)
+    end=pdf_info["end"] if pdf_info else max(r["date"] for r in rows)
+    old=db.scalars(select(CashTransaction).where(CashTransaction.account_id==account.id,
+        CashTransaction.transaction_date>=start,CashTransaction.transaction_date<=end,
+        CashTransaction.source=="bank_import").order_by(CashTransaction.id)).all()
+    buckets=defaultdict(list); pdf_ids=set(); old_identity={}
+    for tx in old:
+        try: raw=json.loads(tx.raw_data or "{}")
+        except Exception: raw={}
+        if not isinstance(raw,dict): raw={}
+        if raw.get("format")=="pdf" or (isinstance(raw.get("row"),list) and raw["row"] and raw["row"][0]=="PDF"): pdf_ids.add(tx.id)
+        old_identity[tx.id]=raw.get("identity") or statement_identity({"description":tx.description,"counterparty":tx.counterparty,"document":tx.document_number,"tax_id":raw.get("tax_id")})
+        buckets[(tx.transaction_date,tx_sign(tx.transaction_type)*Decimal(tx.amount))].append(tx)
+    manual_keys=set()
+    if pdf_info or pdf_ids:
+        manual=db.scalars(select(CashTransaction).where(CashTransaction.account_id==account.id,
+            CashTransaction.transaction_date>=start,CashTransaction.transaction_date<=end,
+            CashTransaction.source!="bank_import")).all()
+        manual_keys={(tx.transaction_date,tx_sign(tx.transaction_type)*Decimal(tx.amount)) for tx in manual
+            if not (tx.source=="transfer" and tx.transfer_ref and not tx.reconciled)}
+    near=defaultdict(list)
+    if profile_from_bank_name(account.bank_name or account.name)=="c6":
+        for tx in db.scalars(select(CashTransaction).where(CashTransaction.account_id==account.id,
+            CashTransaction.transaction_date>=start-timedelta(days=7),CashTransaction.transaction_date<=end+timedelta(days=7),
+            CashTransaction.source=="bank_import")).all():
+            try: raw=json.loads(tx.raw_data or "{}")
+            except Exception: raw={}
+            if pdf_info or raw.get("format")=="pdf":
+                near[(norm_text(tx.description),tx_sign(tx.transaction_type)*Decimal(tx.amount))].append(tx.transaction_date)
+    used=set(); result=[]; occurrences=Counter(); assigned=set(); uncertain=False
+    known_keys={tx.import_key for tx in old if tx.import_key}
+    for item in rows:
+        signed=Decimal(item["signed_amount"]).quantize(Decimal("0.01")); ident=statement_identity(item)
+        key_source=f'{account.id}|{item["date"]}|{ident["description"]}|{ident["counterparty"]}|{ident["tax_id"]}|{signed}|{ident["document"]}'
+        occurrences[key_source]+=1; n=occurrences[key_source]
+        key=hashlib.sha256((key_source if n==1 else f'{key_source}|occ={n}').encode()).hexdigest()
+        candidates=[tx for tx in buckets[(item["date"],signed)] if tx.id not in used]
+        exact=[tx for tx in candidates if tx.import_key==key]
+        compatible=[tx for tx in candidates if old_identity[tx.id].get("description")==ident["description"] and all(not ident[k] or not old_identity[tx.id].get(k) or ident[k]==old_identity[tx.id][k] for k in ("counterparty","document","tax_id"))]
+        # Exact key wins; otherwise compare original description and all available metadata.
+        if not exact and len(compatible)>1 and (pdf_info or any(tx.id in pdf_ids for tx in compatible)):
+            identities={tuple(sorted(old_identity[tx.id].items())) for tx in compatible}
+            if len(identities)>1: uncertain=True
+        match=(exact or compatible or [None])[0]
+        if match:
+            used.add(match.id); result.append((item,key,True)); continue
+        if any(pdf_info or tx.id in pdf_ids for tx in candidates) or (item["date"],signed) in manual_keys: uncertain=True
+        if any(d!=item["date"] and abs((d-item["date"]).days)<=7 for d in near[(ident["description"],signed)]): uncertain=True
+        # Stable occurrence keys preserve legitimate repeated lines from a single statement.
+        while key in assigned or key in known_keys:
+            n+=1; key=hashlib.sha256(f'{key_source}|occ={n}'.encode()).hexdigest()
+        assigned.add(key); result.append((item,key,False))
+    # For PDF overlaps fail closed if any previously imported movement cannot be matched.
+    # In the opposite direction only PDF-sourced existing movements trigger this rule.
+    if uncertain or any(tx.id not in used and (pdf_info or tx.id in pdf_ids) for tx in old):
+        raise ValueError("Extrato sobreposto com lançamentos diferentes dos já importados. Para evitar duplicidade, nada foi gravado. Use o mesmo formato anterior ou confira o período sem sobreposição.")
+    return result
+
+
 @router.post("/admin/financeiro/importar", response_class=HTMLResponse)
-async def bank_import_submit(request:Request, account_id:int=Form(...), statement:UploadFile=File(...), db:Session=Depends(get_db)):
-    user=require_admin(request,db); account=db.get(FinancialAccount,account_id)
+async def bank_import_submit(request:Request, account_id:int=Form(...), statement:UploadFile=File(...), pdf_password:str=Form(""), mode:str=Form("import"), db:Session=Depends(get_db)):
+    user=require_admin(request,db)
+    content=await statement.read(12*1024*1024+1); file_hash=hashlib.sha256(content).hexdigest()
+    # Serialize imports for the same financial account on PostgreSQL.
+    account=db.scalar(select(FinancialAccount).where(FinancialAccount.id==account_id).with_for_update())
     if not account or account.account_type!="bank": raise HTTPException(400,"Selecione uma conta bancária")
-    content=await statement.read(); file_hash=hashlib.sha256(content).hexdigest()
     if db.scalar(select(BankStatementImport).where(BankStatementImport.financial_account_id==account.id,BankStatementImport.file_hash==file_hash)):
         return RedirectResponse("/admin/financeiro/importar?msg=Este arquivo de extrato já foi importado. Nenhum lançamento foi duplicado",303)
     try:
-        matrix=read_statement_matrix(statement.filename or "extrato.xlsx",content)
-        file_profile=detect_bank_profile(matrix, None)
-        account_profile=profile_from_bank_name(account.bank_name)
+        if len(content)>12*1024*1024: raise ValueError("Arquivo superior a 12 MB.")
+        pdf_info=None
+        account_profile=profile_from_bank_name(account.bank_name or account.name)
+        if Path(statement.filename or "").suffix.lower()==".pdf":
+            pdf_info=read_pdf(content,pdf_password)
+            file_profile=pdf_info["profile"]
+            if account_profile!=file_profile: raise ValueError("Banco do PDF não corresponde à conta selecionada. Confira o cadastro.")
+            def account_digits(v): return re.sub(r"\D","",str(v or "")).lstrip("0")
+            if not account_digits(account.account_number) or account_digits(account.account_number)!=account_digits(pdf_info["account"]):
+                raise ValueError("Número da conta do PDF não confere. Cadastre o número da conta com o dígito em Contas e confira o banco selecionado.")
+            if account.agency and account_digits(account.agency)!=account_digits(pdf_info["agency"]):
+                raise ValueError("Agência/cooperativa do PDF não confere com o cadastro da conta.")
+            rows=pdf_info["rows"]
+        else:
+            matrix=read_statement_matrix(statement.filename or "extrato.xlsx",content)
+            file_profile=detect_bank_profile(matrix, None)
+            rows=parse_statement_rows(matrix)
         if file_profile != "generic" and account_profile != "generic" and file_profile != account_profile:
             raise ValueError(
                 f"O arquivo parece ser do banco {BANK_PROFILE_LABELS.get(file_profile,file_profile)}, "
@@ -1221,7 +1306,14 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
                 "Selecione a conta correta ou confira o arquivo antes de importar."
             )
         profile=file_profile if file_profile != "generic" else account_profile
-        rows=parse_statement_rows(matrix)
+        plan=plan_statement_import(db,account,rows,pdf_info)
+        if mode=="preview":
+            n=sum(not duplicate for _,_,duplicate in plan)
+            msg=f"Conferência sem gravação: {len(rows)} movimentos; {n} ainda não encontrados no sistema; {len(rows)-n} já importados."
+            if pdf_info:
+                msg+=f" PDF {BANK_PROFILE_LABELS[file_profile]} validado; saldo inicial R$ {pdf_info['opening']:.2f}; saldo final R$ {pdf_info['closing']:.2f}."
+            db.rollback()
+            return render_bank_import(request,db,user,message=msg+" Se estiver correto, selecione novamente o arquivo e clique em Importar.")
         groups_by_name={g.name:g for g in db.scalars(select(CashGroup)).all()}
         batch=BankStatementImport(
             financial_account_id=account.id,
@@ -1235,19 +1327,15 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
         existing_tx_count=db.scalar(select(func.count(CashTransaction.id)).where(CashTransaction.account_id==account.id)) or 0
         imported=0; auto_classified=0; learned_count=0; duplicates=0; matched_transfers=0
         signed_sum=Decimal("0"); last_balance=None; last_balance_date=None
-        for item in rows:
+        for item,import_key,duplicate in plan:
             signed=Decimal(item["signed_amount"]); balance=item["balance"]
-            key_source=f'{account.id}|{item["date"]}|{norm_text(item["description"])}|{norm_text(item.get("counterparty"))}|{normalize_tax_id(item.get("tax_id"))}|{signed}|{norm_text(item["document"] or "")}'
-            import_key=hashlib.sha256(key_source.encode("utf-8")).hexdigest()
-
-            # Proteção em dois níveis: chave estável e comparação do lançamento já importado.
-            if db.scalar(select(CashTransaction.id).where(CashTransaction.import_key==import_key)) or existing_imported_transaction(db, account.id, item):
+            if duplicate:
                 duplicates += 1
                 if balance is not None and (last_balance_date is None or item["date"]>=last_balance_date):
                     last_balance=balance; last_balance_date=item["date"]
                 continue
 
-            raw_payload={"profile":profile,"tax_id":item.get("tax_id"),"row":item["raw"]}
+            raw_payload={"profile":profile,"format":"pdf" if pdf_info else "spreadsheet","identity":statement_identity(item),"tax_id":item.get("tax_id"),"row":item["raw"],"accounting_date":item.get("accounting_date")}
 
             # Se uma transferência foi criada manualmente pelo outro lado, concilia em vez de duplicar.
             synthetic=synthetic_transfer_match(db, account.id, item)
@@ -1261,6 +1349,7 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
                 synthetic.reconciled=True
                 raw_payload["rule"]="contrapartida_transferencia_manual"
                 synthetic.raw_data=json.dumps(raw_payload,default=str,ensure_ascii=False)
+                db.flush()
                 matched_transfers += 1
                 if balance is not None and (last_balance_date is None or item["date"]>=last_balance_date):
                     last_balance=balance; last_balance_date=item["date"]
@@ -1296,10 +1385,14 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
         db.flush()
         linked=link_pending_internal_transfers(db)
         batch.rows_count=imported + matched_transfers
+        if pdf_info:
+            last_balance=pdf_info["closing"]; last_balance_date=pdf_info["last"]
         if last_balance is not None:
-            account.last_statement_balance=last_balance; account.last_statement_date=last_balance_date
+            if account.last_statement_date is None or last_balance_date>=account.last_statement_date:
+                account.last_statement_balance=last_balance; account.last_statement_date=last_balance_date
             if existing_tx_count==0 and Decimal(account.opening_balance or 0)==0:
-                account.opening_balance=last_balance-signed_sum
+                account.opening_balance=pdf_info["opening"] if pdf_info else last_balance-signed_sum
+        difference=account_balance(db,account,last_balance_date)-last_balance if pdf_info else Decimal("0")
         db.commit()
         profile_label=BANK_PROFILE_LABELS.get(profile,profile)
         msg=f"{imported} novos lançamentos importados ({profile_label})"
@@ -1313,7 +1406,9 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
             msg += f"; {matched_transfers} contrapartida(s) de transferência conciliada(s)"
         if linked:
             msg += f"; {linked} transferência(s) entre contas vinculada(s)"
-        return RedirectResponse(f"/admin/financeiro/importar?msg={msg}",303)
+        if pdf_info and difference:
+            msg+="; atenção: saldo registrado difere do saldo do PDF. Confira o saldo inicial e lançamentos anteriores; nenhum ajuste artificial foi criado."
+        return RedirectResponse("/admin/financeiro/importar?"+urlencode({"msg":msg}),303)
     except Exception as exc:
         db.rollback()
         accounts=db.scalars(select(FinancialAccount).where(FinancialAccount.account_type=="bank").order_by(FinancialAccount.name)).all()
@@ -1321,9 +1416,9 @@ async def bank_import_submit(request:Request, account_id:int=Form(...), statemen
         rules=db.scalars(select(CashClassificationRule).where(CashClassificationRule.active.is_(True)).order_by(CashClassificationRule.updated_at.desc()).limit(100)).all()
         groups=db.scalars(select(CashGroup)).all()
         account_map={a.id:a for a in accounts}; group_map={g.id:g for g in groups}
-        account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name), "Genérico") for a in accounts}
+        account_profiles={a.id:BANK_PROFILE_LABELS.get(profile_from_bank_name(a.bank_name or a.name), "Genérico") for a in accounts}
         return templates.TemplateResponse(request,"bank_import.html",{
             "user":user,"accounts":accounts,"imports":imports,"rules":rules,"account_map":account_map,"group_map":group_map,
-            "account_profiles":account_profiles,"error":str(exc),"message":None
+            "account_profiles":account_profiles,"error":str(exc) if isinstance(exc,ValueError) else "Não foi possível concluir a importação. Nenhum lançamento foi gravado.","message":None
         },status_code=400)
 
