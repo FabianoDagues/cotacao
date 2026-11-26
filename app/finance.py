@@ -1215,16 +1215,28 @@ def statement_identity(item):
 def plan_statement_import(db, account, rows, pdf_info):
     start=pdf_info["start"] if pdf_info else min(r["date"] for r in rows)
     end=pdf_info["end"] if pdf_info else max(r["date"] for r in rows)
+    c6=profile_from_bank_name(account.bank_name or account.name)=="c6"
     old=db.scalars(select(CashTransaction).where(CashTransaction.account_id==account.id,
         CashTransaction.transaction_date>=start,CashTransaction.transaction_date<=end,
         CashTransaction.source=="bank_import").order_by(CashTransaction.id)).all()
     buckets=defaultdict(list); pdf_ids=set(); old_identity={}
-    for tx in old:
+
+    def metadata(tx):
         try: raw=json.loads(tx.raw_data or "{}")
         except Exception: raw={}
-        if not isinstance(raw,dict): raw={}
-        if raw.get("format")=="pdf" or (isinstance(raw.get("row"),list) and raw["row"] and raw["row"][0]=="PDF"): pdf_ids.add(tx.id)
-        old_identity[tx.id]=raw.get("identity") or statement_identity({"description":tx.description,"counterparty":tx.counterparty,"document":tx.document_number,"tax_id":raw.get("tax_id")})
+        return raw if isinstance(raw,dict) else {}
+
+    def from_pdf(raw):
+        return raw.get("format")=="pdf" or (isinstance(raw.get("row"),list) and raw["row"] and raw["row"][0]=="PDF")
+
+    def identity(tx, raw):
+        saved=raw.get("identity")
+        return saved if isinstance(saved,dict) else statement_identity({"description":tx.description,"counterparty":tx.counterparty,"document":tx.document_number,"tax_id":raw.get("tax_id")})
+
+    for tx in old:
+        raw=metadata(tx)
+        if from_pdf(raw): pdf_ids.add(tx.id)
+        old_identity[tx.id]=identity(tx,raw)
         buckets[(tx.transaction_date,tx_sign(tx.transaction_type)*Decimal(tx.amount))].append(tx)
     manual_keys=set()
     if pdf_info or pdf_ids:
@@ -1233,42 +1245,87 @@ def plan_statement_import(db, account, rows, pdf_info):
             CashTransaction.source!="bank_import")).all()
         manual_keys={(tx.transaction_date,tx_sign(tx.transaction_type)*Decimal(tx.amount)) for tx in manual
             if not (tx.source=="transfer" and tx.transfer_ref and not tx.reconciled)}
+    # PDF uses transaction date, while some spreadsheets use processing date.
+    # Only a cross-format date ambiguity needs this conservative check. Two PDFs
+    # with different transaction dates are distinct, even with identical PIX text/value.
     near=defaultdict(list)
-    if profile_from_bank_name(account.bank_name or account.name)=="c6":
+    if c6:
         for tx in db.scalars(select(CashTransaction).where(CashTransaction.account_id==account.id,
             CashTransaction.transaction_date>=start-timedelta(days=7),CashTransaction.transaction_date<=end+timedelta(days=7),
             CashTransaction.source=="bank_import")).all():
-            try: raw=json.loads(tx.raw_data or "{}")
-            except Exception: raw={}
-            if pdf_info or raw.get("format")=="pdf":
-                near[(norm_text(tx.description),tx_sign(tx.transaction_type)*Decimal(tx.amount))].append(tx.transaction_date)
-    used=set(); result=[]; occurrences=Counter(); assigned=set(); uncertain=False
+            raw=metadata(tx)
+            if bool(pdf_info)!=from_pdf(raw):
+                near[(identity(tx,raw).get("description"),tx_sign(tx.transaction_type)*Decimal(tx.amount))].append(tx)
+    used=set(); occurrences=Counter(); assigned=set(); issues=[]
     known_keys={tx.import_key for tx in old if tx.import_key}
+    entries=[]
     for item in rows:
         signed=Decimal(item["signed_amount"]).quantize(Decimal("0.01")); ident=statement_identity(item)
         key_source=f'{account.id}|{item["date"]}|{ident["description"]}|{ident["counterparty"]}|{ident["tax_id"]}|{signed}|{ident["document"]}'
         occurrences[key_source]+=1; n=occurrences[key_source]
         key=hashlib.sha256((key_source if n==1 else f'{key_source}|occ={n}').encode()).hexdigest()
-        candidates=[tx for tx in buckets[(item["date"],signed)] if tx.id not in used]
-        exact=[tx for tx in candidates if tx.import_key==key]
-        compatible=[tx for tx in candidates if old_identity[tx.id].get("description")==ident["description"] and all(not ident[k] or not old_identity[tx.id].get(k) or ident[k]==old_identity[tx.id][k] for k in ("counterparty","document","tax_id"))]
-        # Exact key wins; otherwise compare original description and all available metadata.
-        if not exact and len(compatible)>1 and (pdf_info or any(tx.id in pdf_ids for tx in compatible)):
-            identities={tuple(sorted(old_identity[tx.id].items())) for tx in compatible}
-            if len(identities)>1: uncertain=True
-        match=(exact or compatible or [None])[0]
-        if match:
-            used.add(match.id); result.append((item,key,True)); continue
-        if any(pdf_info or tx.id in pdf_ids for tx in candidates) or (item["date"],signed) in manual_keys: uncertain=True
-        if any(d!=item["date"] and abs((d-item["date"]).days)<=7 for d in near[(ident["description"],signed)]): uncertain=True
-        # Stable occurrence keys preserve legitimate repeated lines from a single statement.
+        entries.append(dict(item=item,signed=signed,ident=ident,key_source=key_source,n=n,key=key,match=None))
+
+    def compatible(entry, tx):
+        ident=entry["ident"]; prev=old_identity[tx.id]
+        return prev.get("description")==ident["description"] and all(not ident[k] or not prev.get(k) or ident[k]==prev[k] for k in ("counterparty","document","tax_id"))
+
+    def candidates(entry):
+        return [tx for tx in buckets[(entry["item"]["date"],entry["signed"])] if tx.id not in used]
+
+    def bind(entry,tx):
+        entry["match"]=tx; used.add(tx.id)
+
+    # Reserve exact matches for the entire file first. An incomplete XLS row
+    # must not consume the only candidate of a later exact match.
+    for entry in entries:
+        exact=[tx for tx in candidates(entry) if tx.import_key==entry["key"] and compatible(entry,tx)]
+        if exact: bind(entry,exact[0])
+    for entry in entries:
+        if entry["match"] is not None: continue
+        options=[tx for tx in candidates(entry) if compatible(entry,tx)]
+        if not options: continue
+        if len(options)>1 and (pdf_info or any(tx.id in pdf_ids for tx in options)):
+            identities={tuple(sorted(old_identity[tx.id].items())) for tx in options}
+            if len(identities)>1:
+                issues.append((entry["item"]["date"],entry["signed"],"mais de um lançamento anterior compatível")); continue
+        bind(entry,options[0])
+
+    result=[]
+    for entry in entries:
+        item=entry["item"]; signed=entry["signed"]; ident=entry["ident"]; key=entry["key"]
+        if entry["match"] is not None:
+            result.append((item,key,True)); continue
+        # Distinct new PIX of equal value on the same day are legitimate if all
+        # prior rows were matched. Only remaining unmatched rows are conflicts.
+        if any(pdf_info or tx.id in pdf_ids for tx in candidates(entry)):
+            issues.append((item["date"],signed,"descrição ou documento diferente de um lançamento anterior"))
+        if (item["date"],signed) in manual_keys:
+            issues.append((item["date"],signed,"possível lançamento manual já registrado"))
+        for tx in near[(ident["description"],signed)]:
+            if tx.id in used or tx.transaction_date==item["date"] or abs((tx.transaction_date-item["date"]).days)>7:
+                continue
+            # When the PDF contains both dates, use that evidence instead of
+            # assuming every same-value PIX within a week might be a duplicate.
+            accounting=parse_date_value(item.get("accounting_date")) if pdf_info else parse_date_value(metadata(tx).get("accounting_date"))
+            other_date=tx.transaction_date if pdf_info else item["date"]
+            if accounting is None or accounting==other_date:
+                issues.append((item["date"],signed,"possível diferença entre data de movimento e processamento em PDF/Excel"))
+                break
+        n=entry["n"]; key_source=entry["key_source"]
         while key in assigned or key in known_keys:
             n+=1; key=hashlib.sha256(f'{key_source}|occ={n}'.encode()).hexdigest()
         assigned.add(key); result.append((item,key,False))
-    # For PDF overlaps fail closed if any previously imported movement cannot be matched.
-    # In the opposite direction only PDF-sourced existing movements trigger this rule.
-    if uncertain or any(tx.id not in used and (pdf_info or tx.id in pdf_ids) for tx in old):
-        raise ValueError("Extrato sobreposto com lançamentos diferentes dos já importados. Para evitar duplicidade, nada foi gravado. Use o mesmo formato anterior ou confira o período sem sobreposição.")
+    # Still fail closed if a previously imported movement is absent from the
+    # new overlapping PDF. Never silently discard or replace a saved entry.
+    for tx in old:
+        if tx.id not in used and (pdf_info or tx.id in pdf_ids):
+            issues.append((tx.transaction_date,tx_sign(tx.transaction_type)*Decimal(tx.amount),"lançamento anterior não encontrado no novo extrato"))
+    if issues:
+        unique=list(dict.fromkeys(issues))
+        details="; ".join(f"{d:%d/%m/%Y} — R$ {v:.2f} ({reason})" for d,v,reason in unique[:5])
+        more=f"; mais {len(unique)-5} divergência(s)" if len(unique)>5 else ""
+        raise ValueError(f"Conferência de sobreposição: nada foi gravado. {len(unique)} divergência(s): {details}{more}. Confira esses movimentos ou exporte somente os dias ainda não importados, de preferência no mesmo formato anterior.")
     return result
 
 

@@ -129,3 +129,6 @@ Menu lateral, central de pedidos e registro independente de baixas. Consulte REA
 
 ## V7.10
 Baixa rápida de produtos com leitura por teclado, busca e vínculo de código de barras. Veja README_ATUALIZACAO_V7_10.md.
+
+## V7.11
+Correção da conferência de sobreposição do C6. Veja README_ATUALIZACAO_V7_11.md.
