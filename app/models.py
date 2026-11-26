@@ -197,3 +197,12 @@ class ProductWriteOff(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+
+class ProductBarcode(Base):
+    """Vínculo explícito de um código de barras a um produto de baixa."""
+    __tablename__ = "product_barcodes"
+    barcode: Mapped[str] = mapped_column(String(80), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), default="")
+    description: Mapped[str] = mapped_column(String(255))
+    unit: Mapped[str] = mapped_column(String(40))

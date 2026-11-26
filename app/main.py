@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timedelta, date
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from pathlib import Path
+from urllib.parse import urlencode
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -17,12 +18,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import select, and_, inspect, text, delete
+from sqlalchemy import select, and_, inspect, text, delete, union_all, literal
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from openpyxl import load_workbook, Workbook
 
 from .db import Base, engine, get_db, SessionLocal
-from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff
+from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff, ProductBarcode
 from .security import hash_password, verify_password
 from .finance import router as finance_router, seed_finance_defaults
 
@@ -1049,11 +1051,75 @@ def write_off_values(form):
     return dict(movement_date=day, code=code, description=description, unit=unit, quantity=quantity, unit_cost=cost, reason=reason, notes=notes or None)
 
 
+def normalize_product_search(value):
+    return " ".join("".join(c for c in unicodedata.normalize("NFKD", str(value or "").casefold()) if not unicodedata.combining(c)).split())
+
+
+def product_lookup(db, term, mode):
+    """Consulta todos os produtos cotados, baixas ativas e vínculos explícitos.
+    Nenhum código é convertido em número: zeros à esquerda são preservados.
+    """
+    exact = mode == "code"
+    if exact:
+        alias = db.get(ProductBarcode, term)
+        if alias:
+            return [{"code": alias.code, "description": alias.description, "unit": alias.unit, "barcode": alias.barcode}], False
+    q = select(QuoteItem.code.label("code"), QuoteItem.description.label("description"), QuoteItem.base_unit.label("unit"), literal("").label("barcode")).distinct()
+    w = select(ProductWriteOff.code, ProductWriteOff.description, ProductWriteOff.unit, literal("")).where(ProductWriteOff.cancelled_at.is_(None)).distinct()
+    b = select(ProductBarcode.code, ProductBarcode.description, ProductBarcode.unit, ProductBarcode.barcode)
+    if exact:
+        q = q.where(QuoteItem.code == term)
+        w = w.where(ProductWriteOff.code == term)
+        b = b.where(ProductBarcode.code == term)
+    source = union_all(b, q, w).subquery()
+    query = select(source).order_by(source.c.description, source.c.code, source.c.unit, source.c.barcode.desc()).execution_options(yield_per=200)
+    tokens = normalize_product_search(term).split()
+    results, seen = [], set()
+    for code, description, unit, barcode in db.execute(query):
+        code, description, unit = code or "", description or "", (unit or "UN").upper()
+        if not description.strip(): continue
+        if not exact and not all(t in normalize_product_search(f"{description} {code} {barcode or ''}") for t in tokens): continue
+        key = (code, normalize_product_search(description), unit)
+        if key in seen: continue
+        seen.add(key)
+        results.append(dict(code=code, description=description, unit=unit, barcode=barcode or ""))
+        if len(results) > 30: break
+    return results[:30], len(results) > 30
+
+
+@app.get("/admin/baixas/buscar-produtos")
+def product_write_off_search(request: Request, q: str = "", modo: str = "description", db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    q = q.strip()
+    if modo not in ("code", "description") or len(q) > 255 or (modo == "code" and len(q) > 80):
+        raise HTTPException(400, "Busca inválida.")
+    if not q or (modo == "description" and len(q) < 2):
+        return {"products": [], "more": False}
+    products, more = product_lookup(db, q, modo)
+    return {"products": products, "more": more}
+
+
+def save_product_barcode(db, form, data):
+    if form.get("remember_barcode") != "1": return
+    barcode = str(form.get("barcode", "")).strip()
+    if not barcode or len(barcode) > 80 or any(c.isspace() or not c.isprintable() for c in barcode):
+        raise ValueError("Informe um código de barras válido, sem espaços, para vincular.")
+    current = db.get(ProductBarcode, barcode)
+    identity = (data["code"], normalize_product_search(data["description"]), data["unit"])
+    if current:
+        if identity != (current.code, normalize_product_search(current.description), current.unit):
+            raise ValueError("Este código de barras já está vinculado a outro produto. Desmarque o vínculo e confira o código antes de salvar.")
+        return
+    # Um código já conhecido com outra identificação não deve ser sobrescrito.
+    matches, more = product_lookup(db, barcode, "code")
+    if more or any((p["code"], normalize_product_search(p["description"]), p["unit"]) != identity for p in matches):
+        raise ValueError("O código lido já identifica outro produto no histórico. Confira antes de criar o vínculo.")
+    db.add(ProductBarcode(barcode=barcode, code=data["code"], description=data["description"], unit=data["unit"]))
+
+
 def render_write_off_form(request, db, user, row=None, values=None, error=None):
-    data = values if values is not None else ({key: getattr(row, key) for key in ("movement_date", "code", "description", "unit", "quantity", "unit_cost", "reason", "notes")} if row else {"movement_date": now_local().date().isoformat(), "unit": "UN"})
-    # Sugestões de produtos anteriormente cotados, sem depender de cadastro de estoque.
-    products = db.execute(select(QuoteItem.code, QuoteItem.description, QuoteItem.base_unit).distinct().order_by(QuoteItem.description).limit(1500)).all()
-    return templates.TemplateResponse(request, "product_write_off_form.html", {"user": user, "row": row, "values": data, "reasons": WRITE_OFF_REASONS, "products": [list(p) for p in products], "error": error}, status_code=400 if error else 200)
+    data = values if values is not None else ({key: getattr(row, key) for key in ("movement_date", "code", "description", "unit", "quantity", "unit_cost", "reason", "notes")} if row else {"movement_date": now_local().date().isoformat(), "unit": "UN", "quantity": "1"})
+    return templates.TemplateResponse(request, "product_write_off_form.html", {"user": user, "row": row, "values": data, "reasons": WRITE_OFF_REASONS, "error": error, "saved": request.query_params.get("salvo") == "1" and not error}, status_code=400 if error else 200)
 
 
 @app.get("/admin/baixas", response_class=HTMLResponse)
@@ -1085,7 +1151,16 @@ def product_write_offs(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/admin/baixas/nova", response_class=HTMLResponse)
 def product_write_off_new(request: Request, db: Session = Depends(get_db)):
-    return render_write_off_form(request, db, require_role(request, db, "admin"))
+    user = require_role(request, db, "admin")
+    values = None
+    if request.query_params.get("salvo") == "1":
+        try:
+            day = date.fromisoformat(request.query_params.get("data", ""))
+        except ValueError:
+            day = now_local().date()
+        reason = request.query_params.get("motivo", "")
+        values = {"movement_date": day.isoformat(), "reason": reason if reason in WRITE_OFF_REASONS else "", "unit": "UN", "quantity": "1"}
+    return render_write_off_form(request, db, user, values=values)
 
 
 @app.post("/admin/baixas/nova", response_class=HTMLResponse)
@@ -1094,11 +1169,18 @@ async def product_write_off_create(request: Request, db: Session = Depends(get_d
     form = await request.form()
     try:
         data = write_off_values(form)
+        save_product_barcode(db, form, data)
     except (ValueError, InvalidOperation) as exc:
         return render_write_off_form(request, db, user, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
     db.add(ProductWriteOff(**data, created_by_user_id=user.id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return render_write_off_form(request, db, user, values=dict(form), error="Não foi possível salvar o vínculo. Confira o código e tente novamente.")
     day = data["movement_date"].isoformat()
+    if form.get("action") == "next":
+        return RedirectResponse("/admin/baixas/nova?" + urlencode({"salvo": "1", "data": day, "motivo": data["reason"]}), 303)
     return RedirectResponse(f"/admin/baixas?inicio={day}&fim={day}", 303)
 
 
@@ -1120,10 +1202,15 @@ async def product_write_off_update(request: Request, row_id: int, db: Session = 
     form = await request.form()
     try:
         data = write_off_values(form)
+        save_product_barcode(db, form, data)
     except (ValueError, InvalidOperation) as exc:
         return render_write_off_form(request, db, user, row=row, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
     for key, val in data.items(): setattr(row, key, val)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return render_write_off_form(request, db, user, row=row, values=dict(form), error="Não foi possível salvar o vínculo. Confira o código e tente novamente.")
     day = data["movement_date"].isoformat()
     return RedirectResponse(f"/admin/baixas?inicio={day}&fim={day}", 303)
 

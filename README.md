@@ -126,3 +126,6 @@ Correção da leitura dos PDFs C6 e Sicoob. Consulte README_ATUALIZACAO_V7_8.md.
 
 ## V7.9
 Menu lateral, central de pedidos e registro independente de baixas. Consulte README_ATUALIZACAO_V7_9.md.
+
+## V7.10
+Baixa rápida de produtos com leitura por teclado, busca e vínculo de código de barras. Veja README_ATUALIZACAO_V7_10.md.

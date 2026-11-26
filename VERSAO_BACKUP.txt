@@ -1,1 +1,1 @@
-Sistema de Cotação V7.9 — menu lateral, compras e baixas
+Sistema de Cotação V7.10 — baixa rápida com código de barras e busca
