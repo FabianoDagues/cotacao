@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Sistema de Cotação{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v=710">
+  <link rel="stylesheet" href="/static/style.css?v=712">
 </head>
 <body class="{% if user and user.active %}app-shell{% endif %}">
 {% if user and user.active %}
@@ -21,18 +21,30 @@
       {{ item('/admin/fornecedores','Fornecedores','◉',path.startswith('/admin/fornecedores')) }}
       <div class="sidebar-section">Produtos</div>
       {{ item('/admin/baixas','Baixa de produtos','↓',path.startswith('/admin/baixas')) }}
+      {{ item('/admin/baixas?relatorio=1','Relatório de baixas','▤',path == '/admin/baixas' and request.query_params.get('relatorio') == '1') }}
+      {{ item('/admin/produtos','Cadastro de produtos','▦',path.startswith('/admin/produtos')) }}
+      <div class="sidebar-section">Cadastros</div>
+      {{ item('/admin/setores','Setores','▣',path == '/admin/setores') }}
+      {{ item('/admin/usuarios','Usuários','◉',path == '/admin/usuarios') }}
       <div class="sidebar-section">Financeiro</div>
       {{ item('/admin/financeiro','Fluxo de caixa','▥',path == '/admin/financeiro' or path.startswith('/admin/financeiro/lancamentos/')) }}
       {{ item('/admin/financeiro/importar','Importar extrato','⇧',path.startswith('/admin/financeiro/importar')) }}
       {{ item('/admin/financeiro/contas','Bancos e caixa','▰',path.startswith('/admin/financeiro/contas')) }}
       {{ item('/admin/financeiro/grupos','Plano de contas','≡',path.startswith('/admin/financeiro/grupos')) }}
+    {% elif user.role == 'employee' %}
+      <div class="sidebar-section">Produtos</div>
+      {% if not user.must_change_password %}
+      {{ item('/admin/baixas/nova','Registrar baixa','+',path == '/admin/baixas/nova') }}
+      {{ item('/admin/baixas','Minhas baixas','▤',path == '/admin/baixas') }}
+      {% endif %}
+      {{ item('/fornecedor/alterar-senha','Alterar senha','⚿',path == '/fornecedor/alterar-senha') }}
     {% elif user.role == 'supplier' %}
       <div class="sidebar-section">Fornecedor</div>
       {% if not user.must_change_password %}{{ item('/fornecedor','Minhas cotações','▤',path == '/fornecedor' or path.startswith('/fornecedor/cotacoes/')) }}{% endif %}
       {{ item('/fornecedor/alterar-senha','Alterar senha','⚿',path == '/fornecedor/alterar-senha') }}
     {% endif %}
   </nav>
-  <div class="sidebar-footer"><strong>{{ user.name }}</strong><small>{{ 'Administrador' if user.role == 'admin' else 'Fornecedor' }}</small><form action="/logout" method="post"><button type="submit">Sair</button></form></div>
+  <div class="sidebar-footer"><strong>{{ user.name }}</strong><small>{{ 'Administrador' if user.role == 'admin' else 'Colaborador' if user.role == 'employee' else 'Fornecedor' }}</small><form action="/logout" method="post"><button type="submit">Sair</button></form></div>
 </aside>
 <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
 <header class="app-header"><button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Alternar menu lateral" aria-expanded="true" aria-controls="app-sidebar">☰</button><strong>Sistema de Cotação</strong><span>{{ user.name }}</span></header>

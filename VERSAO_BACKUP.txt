@@ -1,1 +1,3 @@
-Sistema de Cotação V7.11 — sobreposição de extratos C6
+Sistema de Cotação V7.12
+Base: V7.11
+Baixas, setores, colaboradores, catálogo de produtos e relatório.

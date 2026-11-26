@@ -5,6 +5,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
 
+class Department(Base):
+    __tablename__ = "departments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -15,6 +22,7 @@ class User(Base):
     company_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
 
 
 class PasswordResetToken(Base):
@@ -195,6 +203,10 @@ class ProductWriteOff(Base):
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    department_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    operator_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    catalog_barcode: Mapped[str | None] = mapped_column(String(80), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
@@ -206,3 +218,12 @@ class ProductBarcode(Base):
     code: Mapped[str] = mapped_column(String(80), default="")
     description: Mapped[str] = mapped_column(String(255))
     unit: Mapped[str] = mapped_column(String(40))
+
+
+class CatalogProduct(Base):
+    __tablename__ = "catalog_products"
+    barcode: Mapped[str] = mapped_column(String(80), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), default="", index=True)
+    description: Mapped[str] = mapped_column(String(255))
+    unit: Mapped[str] = mapped_column(String(40), default="UN")
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4))

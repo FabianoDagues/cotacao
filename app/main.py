@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, selectinload
 from openpyxl import load_workbook, Workbook
 
 from .db import Base, engine, get_db, SessionLocal
-from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff, ProductBarcode
+from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff, ProductBarcode, Department, CatalogProduct
 from .security import hash_password, verify_password
 from .finance import router as finance_router, seed_finance_defaults
 
@@ -92,6 +92,17 @@ def ensure_runtime_schema():
                 default_value = "FALSE" if engine.dialect.name == "postgresql" else "0"
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT {default_value}"))
 
+    # Colunas novas são opcionais para preservar registros anteriores.
+    additions = {"users": {"department_id": "INTEGER REFERENCES departments(id)"},
+                 "product_write_offs": {"department_id": "INTEGER REFERENCES departments(id)", "department_name": "VARCHAR(120)", "operator_name": "VARCHAR(120)", "catalog_barcode": "VARCHAR(80)"}}
+    with engine.begin() as conn:
+        for table, fields in additions.items():
+            if table in tables:
+                old = {c["name"] for c in inspector.get_columns(table)}
+                for name, ddl in fields.items():
+                    if name not in old:
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
     # Marca quando cada fornecedor efetivamente clicou em salvar/enviar a cotação.
     if "quote_suppliers" in tables:
         qs_columns = {column["name"] for column in inspector.get_columns("quote_suppliers")}
@@ -155,9 +166,9 @@ def home(request: Request, db: Session = Depends(get_db)):
     if not user or not user.active:
         request.session.clear()
         return RedirectResponse("/login", 303)
-    if user.role == "supplier" and user.must_change_password:
+    if user.role in ("supplier", "employee") and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
-    return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
+    return RedirectResponse("/admin" if user.role == "admin" else "/admin/baixas/nova" if user.role == "employee" else "/fornecedor", 303)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -173,9 +184,9 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["role"] = user.role
-    if user.role == "supplier" and user.must_change_password:
+    if user.role in ("supplier", "employee") and user.must_change_password:
         return RedirectResponse("/fornecedor/alterar-senha", 303)
-    return RedirectResponse("/admin" if user.role == "admin" else "/fornecedor", 303)
+    return RedirectResponse("/admin" if user.role == "admin" else "/admin/baixas/nova" if user.role == "employee" else "/fornecedor", 303)
 
 
 @app.post("/logout")
@@ -866,7 +877,9 @@ def admin_supplier_order_print(quote_id: int, supplier_id: int, request: Request
 
 @app.get("/fornecedor/alterar-senha", response_class=HTMLResponse)
 def supplier_change_password_page(request: Request, db: Session = Depends(get_db)):
-    user = require_role(request, db, "supplier")
+    user = current_user(request, db)
+    if not user or not user.active or user.role not in ("supplier", "employee"):
+        raise HTTPException(403, "Acesso negado")
     return templates.TemplateResponse(
         request,
         "change_password.html",
@@ -882,7 +895,9 @@ def supplier_change_password_submit(
     password_confirm: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    user = require_role(request, db, "supplier")
+    user = current_user(request, db)
+    if not user or not user.active or user.role not in ("supplier", "employee"):
+        raise HTTPException(403, "Acesso negado")
     first_access = bool(user.must_change_password)
 
     if not first_access and not verify_password(current_password, user.password_hash):
@@ -917,7 +932,7 @@ def supplier_change_password_submit(
     user.password_hash = hash_password(password)
     user.must_change_password = False
     db.commit()
-    return RedirectResponse("/fornecedor?senha=alterada", 303)
+    return RedirectResponse("/admin/baixas/nova" if user.role == "employee" else "/fornecedor?senha=alterada", 303)
 
 
 @app.get("/fornecedor", response_class=HTMLResponse)
@@ -1055,7 +1070,7 @@ def normalize_product_search(value):
     return " ".join("".join(c for c in unicodedata.normalize("NFKD", str(value or "").casefold()) if not unicodedata.combining(c)).split())
 
 
-def product_lookup(db, term, mode):
+def legacy_product_lookup(db, term, mode):
     """Consulta todos os produtos cotados, baixas ativas e vínculos explícitos.
     Nenhum código é convertido em número: zeros à esquerda são preservados.
     """
@@ -1087,9 +1102,67 @@ def product_lookup(db, term, mode):
     return results[:30], len(results) > 30
 
 
+def product_lookup(db, term, mode):
+    exact = mode == "code"
+    if exact:
+        p = db.get(CatalogProduct, term)
+        if p:
+            return [catalog_dict(p)], False
+    tokens = normalize_product_search(term).split()
+    results = []
+    stmt = select(CatalogProduct).order_by(CatalogProduct.description)
+    if exact: stmt = stmt.where((CatalogProduct.code == term) | (CatalogProduct.barcode == term))
+    for p in db.scalars(stmt.execution_options(yield_per=200)):
+        if exact or all(t in normalize_product_search(f"{p.description} {p.code} {p.barcode}") for t in tokens):
+            results.append(catalog_dict(p))
+            if len(results) > 30: return results[:30], True
+    old, more = legacy_product_lookup(db, term, mode)
+    # O cadastro geral é a fonte prioritária; não repetir a mesma identificação histórica.
+    for item in old:
+        if any((item['code'] and item['code'] in (p['code'], p['barcode'])) or (item['barcode'] and item['barcode'] == p['barcode']) or (normalize_product_search(item['description']) == normalize_product_search(p['description']) and item['unit'] == p['unit'] and (not item['code'] or not p['code'])) for p in results):
+            continue
+        results.append(item)
+    return results[:30], more or len(results)>30
+
+
+def catalog_dict(p):
+    return dict(code=p.code or p.barcode, description=p.description, unit=p.unit, barcode=p.barcode, unit_cost=str(p.unit_cost), catalog_barcode=p.barcode)
+
+
+def require_write_off_user(request, db):
+    user = current_user(request, db)
+    if not user or not user.active or user.role not in ("admin", "employee") or (user.role == "employee" and user.must_change_password):
+        raise HTTPException(403, "Acesso negado. Faça login e conclua a troca da senha inicial.")
+    return user
+
+
+def department_for(db, user):
+    return db.get(Department, user.department_id) if user.department_id else None
+
+
+def checked_department(db, user):
+    dept = department_for(db, user)
+    if not dept or not dept.active:
+        raise ValueError("Seu usuário precisa estar vinculado a um setor ativo. Solicite o vínculo ao administrador.")
+    return dept
+
+
+def apply_catalog(db, form, data, row=None):
+    barcode = str(form.get("catalog_barcode", "")).strip()
+    if barcode:
+        p = db.get(CatalogProduct, barcode)
+        if not p: raise ValueError("Produto não encontrado no cadastro. Busque novamente.")
+        # Preservar custo e identidade históricos ao editar o mesmo produto.
+        if not row or row.catalog_barcode != barcode:
+            data.update(code=p.code or p.barcode, description=p.description, unit=p.unit, unit_cost=p.unit_cost)
+        else:
+            data.update(code=row.code, description=row.description, unit=row.unit, unit_cost=row.unit_cost)
+    data['catalog_barcode'] = barcode or None
+
+
 @app.get("/admin/baixas/buscar-produtos")
 def product_write_off_search(request: Request, q: str = "", modo: str = "description", db: Session = Depends(get_db)):
-    require_role(request, db, "admin")
+    require_write_off_user(request, db)
     q = q.strip()
     if modo not in ("code", "description") or len(q) > 255 or (modo == "code" and len(q) > 80):
         raise HTTPException(400, "Busca inválida.")
@@ -1119,12 +1192,15 @@ def save_product_barcode(db, form, data):
 
 def render_write_off_form(request, db, user, row=None, values=None, error=None):
     data = values if values is not None else ({key: getattr(row, key) for key in ("movement_date", "code", "description", "unit", "quantity", "unit_cost", "reason", "notes")} if row else {"movement_date": now_local().date().isoformat(), "unit": "UN", "quantity": "1"})
-    return templates.TemplateResponse(request, "product_write_off_form.html", {"user": user, "row": row, "values": data, "reasons": WRITE_OFF_REASONS, "error": error, "saved": request.query_params.get("salvo") == "1" and not error}, status_code=400 if error else 200)
+    if row and values is None: data["catalog_barcode"] = row.catalog_barcode or ""
+    if not row and not data.get("reason"): data["reason"] = "Consumo interno"
+    dept = department_for(db, user)
+    return templates.TemplateResponse(request, "product_write_off_form.html", {"dept": dept, "user": user, "row": row, "values": data, "reasons": WRITE_OFF_REASONS, "error": error, "saved": request.query_params.get("salvo") == "1" and not error}, status_code=400 if error else 200)
 
 
 @app.get("/admin/baixas", response_class=HTMLResponse)
 def product_write_offs(request: Request, db: Session = Depends(get_db)):
-    user = require_role(request, db, "admin")
+    user = require_write_off_user(request, db)
     today = now_local().date()
     start = request.query_params.get("inicio", today.replace(day=1).isoformat())
     end = request.query_params.get("fim", today.isoformat())
@@ -1132,6 +1208,12 @@ def product_write_offs(request: Request, db: Session = Depends(get_db)):
     search = request.query_params.get("busca", "").strip()[:255]
     show_cancelled = request.query_params.get("canceladas") == "1"
     query = select(ProductWriteOff)
+    if user.role == "employee": query = query.where(ProductWriteOff.created_by_user_id == user.id)
+    sector = request.query_params.get("setor", "") if user.role == "admin" else ""
+    operator = request.query_params.get("usuario", "") if user.role == "admin" else ""
+    if sector == "sem": query = query.where(ProductWriteOff.department_id.is_(None))
+    elif sector.isdigit(): query = query.where(ProductWriteOff.department_id == int(sector))
+    if operator.isdigit(): query = query.where(ProductWriteOff.created_by_user_id == int(operator))
     error = None
     try:
         if start and end and date.fromisoformat(start) > date.fromisoformat(end):
@@ -1146,12 +1228,23 @@ def product_write_offs(request: Request, db: Session = Depends(get_db)):
     rows = [] if error else db.scalars(query.order_by(ProductWriteOff.movement_date.desc(), ProductWriteOff.id.desc())).all()
     active = [r for r in rows if not r.cancelled_at]
     cost_total = sum((r.quantity * r.unit_cost for r in active if r.unit_cost is not None), Decimal("0"))
-    return templates.TemplateResponse(request, "product_write_offs.html", {"user": user, "rows": rows, "start": start, "end": end, "reason": reason, "search": search, "show_cancelled": show_cancelled, "reasons": WRITE_OFF_REASONS, "error": error, "cost_total": cost_total, "missing_cost": sum(r.unit_cost is None for r in active), "active_count": len(active)})
+    operators = {u.id:u.name for u in db.scalars(select(User).where(User.role.in_(["admin", "employee"])))} if user.role == "admin" else {user.id:user.name}
+    departments = db.scalars(select(Department).order_by(Department.name)).all() if user.role == "admin" else []
+    report = request.query_params.get("relatorio") == "1"
+    totals = {}
+    master_codes = {p.code or p.barcode:p.barcode for p in db.scalars(select(CatalogProduct))}
+    for r in active:
+        key = (r.catalog_barcode or master_codes.get(r.code) or r.code or normalize_product_search(r.description), r.unit)
+        if key not in totals: totals[key] = dict(code=r.code, description=r.description, unit=r.unit, quantity=Decimal(0), cost=Decimal(0), missing=0)
+        t = totals[key]; t['quantity'] += r.quantity
+        if r.unit_cost is None: t['missing'] += 1
+        else: t['cost'] += r.quantity * r.unit_cost
+    return templates.TemplateResponse(request, "product_write_off_report.html" if report else "product_write_offs.html", {"sector":sector,"operator":operator,"departments":departments,"operators":operators,"totals":sorted(totals.values(), key=lambda t:t['description'].casefold()),"user": user, "rows": rows, "start": start, "end": end, "reason": reason, "search": search, "show_cancelled": show_cancelled, "reasons": WRITE_OFF_REASONS, "error": error, "cost_total": cost_total, "missing_cost": sum(r.unit_cost is None for r in active), "active_count": len(active)})
 
 
 @app.get("/admin/baixas/nova", response_class=HTMLResponse)
 def product_write_off_new(request: Request, db: Session = Depends(get_db)):
-    user = require_role(request, db, "admin")
+    user = require_write_off_user(request, db)
     values = None
     if request.query_params.get("salvo") == "1":
         try:
@@ -1165,14 +1258,24 @@ def product_write_off_new(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/admin/baixas/nova", response_class=HTMLResponse)
 async def product_write_off_create(request: Request, db: Session = Depends(get_db)):
-    user = require_role(request, db, "admin")
+    user = require_write_off_user(request, db)
     form = await request.form()
     try:
         data = write_off_values(form)
-        save_product_barcode(db, form, data)
+        dept = checked_department(db, user)
+        apply_catalog(db, form, data)
+        if user.role == 'employee':
+            if not data['catalog_barcode']:
+                # Produtos antigos continuam disponíveis, mas somente com identificação conhecida.
+                matches, _ = legacy_product_lookup(db, data['code'] or data['description'], 'code' if data['code'] else 'description')
+                if not any((p['code'], normalize_product_search(p['description']), p['unit']) == (data['code'], normalize_product_search(data['description']), data['unit']) for p in matches):
+                    raise ValueError('Produto não encontrado. Solicite o cadastro ao administrador.')
+                data['unit_cost'] = None
+        else:
+            save_product_barcode(db, form, data)
     except (ValueError, InvalidOperation) as exc:
         return render_write_off_form(request, db, user, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
-    db.add(ProductWriteOff(**data, created_by_user_id=user.id))
+    db.add(ProductWriteOff(**data, created_by_user_id=user.id, department_id=dept.id, department_name=dept.name, operator_name=user.name))
     try:
         db.commit()
     except IntegrityError:
@@ -1202,6 +1305,7 @@ async def product_write_off_update(request: Request, row_id: int, db: Session = 
     form = await request.form()
     try:
         data = write_off_values(form)
+        apply_catalog(db, form, data, row)
         save_product_barcode(db, form, data)
     except (ValueError, InvalidOperation) as exc:
         return render_write_off_form(request, db, user, row=row, values=dict(form), error=str(exc) if isinstance(exc, ValueError) else "Valor numérico inválido.")
@@ -1225,3 +1329,203 @@ def product_write_off_cancel(request: Request, row_id: int, db: Session = Depend
         row.cancelled_by_user_id = user.id
         db.commit()
     return RedirectResponse("/admin/baixas?canceladas=1&inicio=&fim=", 303)
+
+
+@app.get('/admin/setores', response_class=HTMLResponse)
+def departments_page(request: Request, db: Session = Depends(get_db)):
+    user = require_role(request, db, 'admin')
+    return templates.TemplateResponse(request, 'departments.html', {'user':user,'departments':db.scalars(select(Department).order_by(Department.name)).all()})
+
+
+@app.post('/admin/setores')
+def department_save(request: Request, name: str = Form(...), department_id: str = Form(''), active: str = Form('1'), db: Session = Depends(get_db)):
+    require_role(request, db, 'admin')
+    name = name.strip()
+    if not name or len(name)>120: raise HTTPException(400,'Informe um nome de setor válido.')
+    row = db.get(Department, int(department_id)) if department_id.isdigit() else None
+    if department_id and not row: raise HTTPException(404,'Setor não encontrado.')
+    if any(normalize_product_search(d.name)==normalize_product_search(name) and (not row or d.id!=row.id) for d in db.scalars(select(Department))):
+        raise HTTPException(400,'Já existe um setor com esse nome.')
+    if not row: row=Department(name=name); db.add(row)
+    row.name=name; row.active=active=='1'
+    db.commit()
+    return RedirectResponse('/admin/setores',303)
+
+
+@app.get('/admin/usuarios', response_class=HTMLResponse)
+def users_page(request: Request, db: Session = Depends(get_db)):
+    user=require_role(request,db,'admin')
+    users=db.scalars(select(User).where(User.role.in_(['admin','employee'])).order_by(User.name)).all()
+    return templates.TemplateResponse(request,'employees.html',{'user':user,'users':users,'departments':db.scalars(select(Department).order_by(Department.name)).all()})
+
+
+@app.post('/admin/usuarios')
+def user_save(request: Request, name: str=Form(...), email: str=Form(...), department_id: str=Form(''), password: str=Form(''), user_id: str=Form(''), active: str=Form('1'), db:Session=Depends(get_db)):
+    require_role(request,db,'admin')
+    name,email=name.strip(),email.strip().lower()
+    if not name or len(name)>120 or not email or len(email)>180 or '@' not in email: raise HTTPException(400,'Nome ou e-mail inválido.')
+    row=db.get(User,int(user_id)) if user_id.isdigit() else None
+    if user_id and (not row or row.role not in ('admin','employee')): raise HTTPException(404,'Usuário interno não encontrado.')
+    dept=db.get(Department,int(department_id)) if department_id.isdigit() else None
+    if (not row or row.role=='employee') and (not dept or not dept.active) and active=='1': raise HTTPException(400,'Selecione um setor ativo.')
+    if department_id and not dept: raise HTTPException(400,'Setor inválido.')
+    if row and row.role=='admin':
+        # Nesta tela, administradores só recebem o vínculo; não alterar credenciais/permissões.
+        row.department_id=dept.id if dept else None
+    else:
+        if password and (len(password)<8 or len(password)>256): raise HTTPException(400,'Senha provisória deve ter de 8 a 256 caracteres.')
+        other=db.scalar(select(User).where(User.email==email))
+        if other and (not row or other.id!=row.id): raise HTTPException(400,'E-mail já cadastrado.')
+        if not row:
+            if not password: raise HTTPException(400,'Informe uma senha provisória.')
+            row=User(role='employee',name=name,email=email,password_hash=hash_password(password),must_change_password=True);db.add(row)
+        row.name=name;row.email=email;row.active=active=='1';row.department_id=dept.id if dept else None
+        if password: row.password_hash=hash_password(password);row.must_change_password=True
+    db.commit()
+    return RedirectResponse('/admin/usuarios',303)
+
+
+def catalog_header(v):
+    return ''.join(c for c in normalize_product_search(v) if c.isalnum())
+
+
+CATALOG_HEADERS={
+    'barcode':{'codigodebarras','codigobarras','ean','ean13','gtin','barcode','codbarras','codbarra','barras','codigobarra'},
+    'description':{'descricao','descricaoproduto','descricaodoproduto','produto','nome','nomeproduto','mercadoria'},
+    'cost':{'precocusto','precodecusto','custounitario','custo','valorcusto','valorunitariocusto','custoproduto','custoreposicao','custoaquisicao'},
+    'code':{'codigo','codigointerno','codproduto','codigoproduto','codigodoproduto','sku','cod'},
+    'unit':{'unidade','un','und','unid','unidademedida','unidadedemedida'},
+}
+
+
+def cell_code(value, fmt=''):
+    if value is None: return ''
+    if isinstance(value,bool): raise ValueError('Código inválido.')
+    if isinstance(value,(float,int)):
+        if value<0 or int(value)!=value or value>=10**15: raise ValueError('Código numérico inválido ou com precisão perdida. Use texto.')
+        code=str(int(value))
+        if fmt and set(fmt)=={'0'}: code=code.zfill(len(fmt))
+        return code
+    return str(value).strip()
+
+
+def read_catalog_rows(raw, filename):
+    if filename.lower().endswith('.xlsx'):
+        wb=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
+        try:
+            for sheet in wb.worksheets:
+                yield sheet.title, ((i,[(c.value,c.number_format or '') for c in row]) for i,row in enumerate(sheet.iter_rows(),1))
+        finally: wb.close()
+    elif filename.lower().endswith('.xls'):
+        try: import xlrd
+        except ImportError: raise ValueError('Suporte XLS não instalado. Atualize as dependências.')
+        wb=xlrd.open_workbook(file_contents=raw,formatting_info=True)
+        for sheet in wb.sheets():
+            def rows():
+                for i in range(sheet.nrows):
+                    yield i+1,[(sheet.cell_value(i,j),wb.format_map[wb.xf_list[sheet.cell_xf_index(i,j)].format_key].format_str) for j in range(sheet.ncols)]
+            yield sheet.name,rows()
+    else: raise ValueError('Selecione um arquivo XLS ou XLSX.')
+
+
+def import_catalog(db, raw, filename, update_cost=False):
+    # Uma planilha de produtos por arquivo; rejeitar ambiguidades em vez de adivinhar colunas.
+    data=[]; errors=[]; found=False
+    for sheet, rows in read_catalog_rows(raw,filename):
+        cols=None
+        for i,cells in rows:
+            values=[v for v,f in cells]
+            if cols is None:
+                if i>30: break
+                matches={key:[j for j,v in enumerate(values) if catalog_header(v) in aliases] for key,aliases in CATALOG_HEADERS.items()}
+                if all(matches[k] for k in ('barcode','description','cost')):
+                    if any(len(v)>1 for v in matches.values()): raise ValueError('Há colunas de produto ambíguas. Use o modelo de importação.')
+                    if found: raise ValueError('Mais de uma aba com cadastro. Importe uma aba por arquivo.')
+                    cols={k:v[0] for k,v in matches.items() if v}; found=True
+                continue
+            if not any(v is not None and str(v).strip() for v in values): continue
+            def get(k): return cells[cols[k]] if k in cols and cols[k]<len(cells) else (None,'')
+            try:
+                barcode=cell_code(*get('barcode')); code=cell_code(*get('code'))
+                desc=str(get('description')[0] or '').strip(); unit=str(get('unit')[0] or 'UN').strip().upper()
+                raw_cost=get('cost')[0]
+                if raw_cost is None or str(raw_cost).strip()=='': raise ValueError('Custo ausente.')
+                cost=parse_decimal(raw_cost)
+                if not barcode or len(barcode)>80 or any(c.isspace() for c in barcode) or not desc or len(desc)>255 or len(code)>80 or len(unit)>40 or not cost.is_finite() or cost<0 or cost>=Decimal('10000000000') or cost!=cost.quantize(Decimal('0.0001')): raise ValueError('Código de barras, descrição ou custo inválido.')
+                data.append((barcode,code,desc,unit,cost,i))
+                if len(data)>100000: raise ValueError('Limite de 100 mil linhas por arquivo.')
+            except (ValueError,InvalidOperation,OverflowError) as e:
+                errors.append(f'{sheet}, linha {i}: {e}')
+                if len(errors)>=20: break
+        if errors: break
+    if not found: raise ValueError('Cabeçalhos não encontrados: Código de barras, Descrição, Preço de custo. Use o modelo.')
+    if errors: raise ValueError('Nenhum produto gravado. '+' | '.join(errors))
+    if not data: raise ValueError('Planilha sem produtos.')
+    existing={p.barcode:p for p in db.scalars(select(CatalogProduct))}; by_code={}
+    for p in existing.values():
+        if p.code: by_code.setdefault(p.code,set()).add(p.barcode)
+    # Vínculos já cadastrados e códigos históricos: não criar outro registro de busca para a mesma identidade.
+    aliases={p.barcode:p for p in db.scalars(select(ProductBarcode))}
+    legacy={}
+    for c,d,u in db.execute(select(QuoteItem.code,QuoteItem.description,QuoteItem.base_unit).distinct()):
+        if c: legacy.setdefault(c,set()).add((normalize_product_search(d),u.upper()))
+    for c,d,u in db.execute(select(ProductWriteOff.code,ProductWriteOff.description,ProductWriteOff.unit).distinct()):
+        if c: legacy.setdefault(c,set()).add((normalize_product_search(d),u.upper()))
+    added=skipped=updated=linked=0; seen={}
+    for barcode,code,desc,unit,cost,i in data:
+        alias=aliases.get(barcode)
+        if alias and code and alias.code and code!=alias.code: raise ValueError(f'Linha {i}: código de barras já vinculado a outro código interno. Nenhum produto gravado.')
+        if alias and not code: code=alias.code
+        if not code and barcode in legacy: code=barcode
+        signature=(code,normalize_product_search(desc),unit,cost)
+        if barcode in seen:
+            if seen[barcode]!=signature: raise ValueError(f'Linha {i}: código de barras repetido com dados diferentes. Nenhum produto gravado.')
+            skipped+=1;continue
+        seen[barcode]=signature
+        p=existing.get(barcode)
+        if p:
+            if code and p.code and code!=p.code: raise ValueError(f'Linha {i}: código interno diverge do cadastro. Nenhum produto gravado.')
+            if update_cost and p.unit_cost!=cost: p.unit_cost=cost;updated+=1
+            else: skipped+=1
+            continue
+        if code and code in by_code and barcode not in by_code[code]: raise ValueError(f'Linha {i}: código interno já cadastrado com outro código de barras. Confira o arquivo.')
+        historical=legacy.get(code or barcode,set())
+        if historical and (normalize_product_search(desc),unit) not in historical and not alias:
+            raise ValueError(f'Linha {i}: código histórico com descrição/unidade diferente. Confira antes de importar.')
+        if alias or historical: linked+=1
+        else: added+=1
+        p=CatalogProduct(barcode=barcode,code=code,description=desc,unit=unit,unit_cost=cost); db.add(p);existing[barcode]=p
+        if code: by_code.setdefault(code,set()).add(barcode)
+    db.commit()
+    return dict(added=added,linked=linked,skipped=skipped,updated=updated)
+
+
+@app.get('/admin/produtos',response_class=HTMLResponse)
+def catalog_page(request:Request,db:Session=Depends(get_db)):
+    user=require_role(request,db,'admin');q=request.query_params.get('q','').strip()[:255]
+    stmt=select(CatalogProduct).order_by(CatalogProduct.description)
+    if q: stmt=stmt.where(CatalogProduct.description.icontains(q,autoescape=True)|CatalogProduct.barcode.icontains(q,autoescape=True)|CatalogProduct.code.icontains(q,autoescape=True))
+    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':q,'products':db.scalars(stmt.limit(200)).all(),'result':None,'error':None})
+
+
+@app.post('/admin/produtos/importar',response_class=HTMLResponse)
+async def catalog_import(request:Request,file:UploadFile=File(...),update_cost:str=Form(''),db:Session=Depends(get_db)):
+    user=require_role(request,db,'admin');result=None;error=None
+    try:
+        raw=await file.read(25*1024*1024+1)
+        if len(raw)>25*1024*1024: raise ValueError('Arquivo acima de 25 MB.')
+        result=import_catalog(db,raw,file.filename or '',update_cost=='1')
+    except Exception as exc:
+        db.rollback();error=str(exc) if isinstance(exc,ValueError) else 'Não foi possível ler ou gravar a planilha. Confira o formato e os dados.'
+    finally: await file.close()
+    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':'','products':db.scalars(select(CatalogProduct).order_by(CatalogProduct.description).limit(200)).all(),'result':result,'error':error},status_code=400 if error else 200)
+
+
+@app.get('/admin/produtos/modelo')
+def catalog_model(request:Request,db:Session=Depends(get_db)):
+    require_role(request,db,'admin')
+    wb=Workbook();ws=wb.active;ws.title='Produtos';ws.append(['Código de barras','Descrição','Preço de custo','Código interno','Unidade'])
+    for col in ('A','D'): ws.column_dimensions[col].number_format='@'
+    for col,width in [('A',23),('B',45),('C',20),('D',20),('E',15)]: ws.column_dimensions[col].width=width
+    stream=io.BytesIO();wb.save(stream);stream.seek(0)
+    return StreamingResponse(stream,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename=modelo_cadastro_produtos.xlsx'})

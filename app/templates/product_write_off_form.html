@@ -1,36 +1,17 @@
-{% extends 'base.html' %}{% block title %}{{'Editar baixa' if row else 'Nova baixa'}}{% endblock %}{% block content %}
-<div class="page-head"><div><h1>{{'Editar baixa' if row else 'Nova baixa de produto'}}</h1><p class="muted">Leia o código de barras ou procure o produto pelo nome. Confira os dados e registre a baixa.</p></div><a class="button" href="/admin/baixas">Voltar à lista</a></div>
-{% if error %}<div class="alert" role="alert">{{error}}</div>{% endif %}
-{% if saved %}<div class="success" role="status">Baixa salva. Pode ler o próximo produto.</div>{% endif %}
-<form class="product-form loss-editor" method="post" id="loss-form">
-  <section class="editor-box loss-search-box">
-    <div class="editor-box-head"><strong>1. Localizar produto</strong><span class="muted">F2: código · F3: descrição</span></div>
-    <div class="loss-content">
-      <div class="loss-search-grid">
-        <div><label for="scan-code">Código de barras / código interno</label><div class="loss-scan-row"><input id="scan-code" name="barcode" type="text" maxlength="80" value="{{values.get('barcode','')}}" placeholder="Leia o código ou digite e pressione Enter" autocomplete="off" spellcheck="false" {% if not row and not error %}autofocus{% endif %}><button type="button" id="scan-button" class="primary">Localizar</button></div><small class="muted">Scanner USB ou Bluetooth configurado como teclado, com Enter ao final.</small></div>
-        <div><label for="product-search">Buscar pela descrição</label><input type="search" id="product-search" maxlength="255" placeholder="Ex.: arroz 5 kg, café, leite…" autocomplete="off"><small class="muted">Digite duas ou mais letras. Use ↑ ↓ e Enter para escolher.</small></div>
-      </div>
-      <p id="lookup-status" class="loss-status muted" role="status" aria-live="polite">{{'Procure outro produto se precisar corrigir a identificação.' if row else 'Pronto para leitura do código ou busca por descrição.'}}</p>
-      <div class="loss-results" id="lookup-results" hidden><table><thead><tr><th>Código</th><th>Descrição</th><th>Un.</th><th></th></tr></thead><tbody id="lookup-body"></tbody></table></div>
-      <label class="check loss-link" id="remember-area"><input type="checkbox" name="remember_barcode" id="remember-barcode" value="1" {% if values.get('remember_barcode') == '1' %}checked{% endif %}> Vincular o código lido ao produto abaixo ao salvar (para próximas leituras).</label>
-    </div>
-  </section>
-  <section class="editor-box"><div class="editor-box-head"><strong>2. Produto identificado</strong><button class="compact" type="button" id="manual-product">Preencher manualmente</button></div>
-    <div class="loss-content loss-product-grid">
-      <label>Código interno / EAN<input id="product-code" name="code" maxlength="80" value="{{values.get('code','')}}" autocomplete="off"></label>
-      <label>Descrição do produto<input required id="product-description" name="description" maxlength="255" value="{{values.get('description','')}}" autocomplete="off"></label>
-      <label>Unidade<input required id="product-unit" name="unit" maxlength="40" value="{{values.get('unit','UN')}}"></label>
-    </div>
-  </section>
-  <section class="editor-box"><div class="editor-box-head"><strong>3. Registrar baixa</strong></div><div class="loss-content loss-detail-grid">
-    <label>Data<input required type="date" name="movement_date" value="{{values.get('movement_date','')}}"></label>
-    <label>Quantidade<div class="loss-quantity"><button type="button" id="qty-minus" aria-label="Diminuir quantidade">−</button><input required id="loss-qty" inputmode="decimal" name="quantity" value="{{values.get('quantity','1')}}"><button type="button" id="qty-plus" aria-label="Aumentar quantidade">+</button></div></label>
-    <label>Custo unitário (opcional)<input id="loss-cost" inputmode="decimal" name="unit_cost" value="{{values.get('unit_cost') if values.get('unit_cost') is not none else ''}}" placeholder="R$ 0,00"></label>
-    <label>Motivo<select required name="reason" id="loss-reason"><option value="">Selecione</option>{% for r in reasons %}<option {% if values.get('reason') == r %}selected{% endif %}>{{r}}</option>{% endfor %}</select></label>
-    <label class="loss-notes">Observação<textarea name="notes" maxlength="4000" rows="2">{{values.get('notes') or ''}}</textarea></label>
-    <div class="loss-total"><small>Custo total estimado da baixa</small><strong id="loss-total">—</strong><small class="muted">Informe o custo real do produto.</small></div>
-  </div></section>
-  <div class="form-actions loss-actions"><a class="button" href="/admin/baixas">Cancelar</a><button type="submit" name="action" value="save">Salvar e voltar</button>{% if not row %}<button type="submit" name="action" value="next" class="primary">Salvar e próximo produto</button>{% endif %}</div>
+{% extends 'base.html' %}{% block title %}{{'Editar baixa' if row else 'Registrar baixa'}}{% endblock %}{% block content %}
+<div class="page-head"><div><h1>{{'Editar baixa' if row else 'Baixa de produto'}}</h1><p class="muted">Leia o código ou digite o nome, informe a quantidade e salve.</p></div><a class="button" href="/admin/baixas">Histórico de baixas</a></div>
+{% if error %}<div class="alert" role="alert">{{error}}</div>{% endif %}{% if saved %}<div class="success" role="status">Baixa registrada. Pode ler o próximo produto.</div>{% endif %}
+{% if not row and (not dept or not dept.active) %}<div class="alert">Seu usuário não tem setor ativo. {% if user.role == 'admin' %}<a href="/admin/usuarios">Vincular setor ao usuário</a>{% else %}Solicite o vínculo ao administrador.{% endif %}</div>{% endif %}
+<form class="card simple-loss" method="post" id="loss-form">
+  <div class="loss-identity"><span><small>Usuário</small><strong>{{row.operator_name or 'Registro anterior' if row else user.name}}</strong></span><span><small>Setor</small><strong>{{(row.department_name or 'Sem setor (histórico)') if row else (dept.name if dept and dept.active else 'Não vinculado')}}</strong></span></div>
+  <label for="product-search">Código de barras ou descrição</label><div class="loss-scan-row"><input id="product-search" type="text" maxlength="255" placeholder="Leia o código de barras ou digite o nome…" autocomplete="off" spellcheck="false" autofocus><button type="button" id="search-button">Buscar</button></div>
+  <div id="lookup-status" class="muted loss-status" role="status" aria-live="polite">Use F2 para voltar à busca.</div>
+  <div class="loss-results" id="lookup-results" hidden><table><thead><tr><th>Código</th><th>Produto</th><th>Un.</th><th>Custo</th></tr></thead><tbody id="lookup-body"></tbody></table></div>
+  <input type="hidden" name="catalog_barcode" id="catalog-barcode" value="{{values.get('catalog_barcode','')}}">
+  <div class="loss-selected-product"><label>Produto selecionado<input id="product-description" name="description" required maxlength="255" value="{{values.get('description','')}}" readonly></label><label>Código<input id="product-code" name="code" maxlength="80" value="{{values.get('code','')}}" readonly></label><label>Unidade<input id="product-unit" name="unit" required maxlength="40" value="{{values.get('unit','UN')}}" readonly></label></div>
+  {% if user.role == 'admin' %}<details class="no-print"><summary>Produto não localizado? Preenchimento manual</summary><div class="action-row"><button type="button" id="manual-product">Liberar campos do produto</button><label>Código de barras para vincular<input id="scan-code" name="barcode" maxlength="80" value="{{values.get('barcode','')}}"></label><label class="check"><input type="checkbox" name="remember_barcode" id="remember-barcode" value="1"> Memorizar vínculo</label></div></details>{% endif %}
+  <div class="loss-compact-fields"><label>Quantidade<div class="loss-quantity"><button type="button" id="qty-minus">−</button><input required id="loss-qty" inputmode="decimal" name="quantity" value="{{values.get('quantity','1')}}"><button type="button" id="qty-plus">+</button></div></label><label>Custo unitário<input id="loss-cost" inputmode="decimal" name="unit_cost" value="{{values.get('unit_cost') if values.get('unit_cost') is not none else ''}}" {% if values.get('catalog_barcode') or user.role != 'admin' %}readonly{% endif %}></label><label>Data<input required type="date" name="movement_date" value="{{values.get('movement_date','')}}"></label><label>Motivo<select required name="reason">{% for r in reasons %}<option {% if values.get('reason') == r %}selected{% endif %}>{{r}}</option>{% endfor %}</select></label></div>
+  <details><summary>Observação (opcional)</summary><textarea name="notes" maxlength="4000" rows="2">{{values.get('notes') or ''}}</textarea></details>
+  <div class="loss-bottom"><div class="loss-total"><small>Custo total da baixa</small><strong id="loss-total">—</strong></div><div class="form-actions"><a class="button" href="/admin/baixas">Voltar</a>{% if row %}<button name="action" value="save" class="primary">Salvar alteração</button>{% else %}<button name="action" value="next" class="primary" {% if not dept or not dept.active %}disabled{% endif %}>Salvar e próximo produto</button>{% endif %}</div></div>
 </form>
-<script src="/static/product_write_off.js?v=710" defer></script>
-{% endblock %}
+<script src="/static/product_write_off.js?v=712" defer></script>{% endblock %}

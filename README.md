@@ -132,3 +132,6 @@ Baixa rápida de produtos com leitura por teclado, busca e vínculo de código d
 
 ## V7.11
 Correção da conferência de sobreposição do C6. Veja README_ATUALIZACAO_V7_11.md.
+
+## V7.12
+Veja README_ATUALIZACAO_V7_12.md: baixa rápida, setores, usuários, catálogo e relatório.
