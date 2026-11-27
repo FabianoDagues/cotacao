@@ -4,7 +4,7 @@
 {% if not row and (not dept or not dept.active) %}<div class="alert">Seu usuário não tem setor ativo. {% if user.role == 'admin' %}<a href="/admin/usuarios">Vincular setor ao usuário</a>{% else %}Solicite o vínculo ao administrador.{% endif %}</div>{% endif %}
 <form class="card simple-loss" method="post" id="loss-form">
   <div class="loss-identity"><span><small>Usuário</small><strong>{{row.operator_name or 'Registro anterior' if row else user.name}}</strong></span><span><small>Setor</small><strong>{{(row.department_name or 'Sem setor (histórico)') if row else (dept.name if dept and dept.active else 'Não vinculado')}}</strong></span></div>
-  <label for="product-search">Código de barras ou descrição</label><div class="loss-scan-row"><input id="product-search" type="text" maxlength="255" placeholder="Leia o código de barras ou digite o nome…" autocomplete="off" spellcheck="false" autofocus><button type="button" id="search-button">Buscar</button></div>
+  <label for="product-search">Código de barras ou descrição</label><div class="loss-scan-row"><input id="product-search" type="text" maxlength="255" placeholder="Leia o código de barras ou digite o nome…" autocomplete="off" spellcheck="false" autofocus><button type="button" id="search-button">Buscar</button><button type="button" id="open-camera" class="primary camera-open" aria-haspopup="dialog"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/><circle cx="12" cy="13" r="4"/></svg> Câmera</button></div>
   <div id="lookup-status" class="muted loss-status" role="status" aria-live="polite">Use F2 para voltar à busca.</div>
   <div class="loss-results" id="lookup-results" hidden><table><thead><tr><th>Código</th><th>Produto</th><th>Un.</th><th>Custo</th></tr></thead><tbody id="lookup-body"></tbody></table></div>
   <input type="hidden" name="catalog_barcode" id="catalog-barcode" value="{{values.get('catalog_barcode','')}}">
@@ -14,4 +14,15 @@
   <details><summary>Observação (opcional)</summary><textarea name="notes" maxlength="4000" rows="2">{{values.get('notes') or ''}}</textarea></details>
   <div class="loss-bottom"><div class="loss-total"><small>Custo total da baixa</small><strong id="loss-total">—</strong></div><div class="form-actions"><a class="button" href="/admin/baixas">Voltar</a>{% if row %}<button name="action" value="save" class="primary">Salvar alteração</button>{% else %}<button name="action" value="next" class="primary" {% if not dept or not dept.active %}disabled{% endif %}>Salvar e próximo produto</button>{% endif %}</div></div>
 </form>
-<script src="/static/product_write_off.js?v=714" defer></script>{% endblock %}
+<link rel="stylesheet" href="/static/barcode_camera.css?v=715">
+<dialog id="barcode-camera" class="camera-dialog" aria-labelledby="camera-title">
+  <div class="camera-heading"><h2 id="camera-title">Ler código de barras</h2><button type="button" id="camera-close" aria-label="Fechar câmera">✕</button></div>
+  <p class="muted camera-instructions">Aponte a câmera traseira para um único código. A imagem é processada no servidor do sistema e não é armazenada.</p>
+  <div class="camera-preview" id="camera-preview" hidden><video id="camera-video" autoplay muted playsinline></video><div class="camera-guide" aria-hidden="true"></div></div>
+  <p id="camera-status" role="status" aria-live="polite">Solicitando acesso à câmera…</p>
+  <div id="camera-codes" class="action-row" hidden></div>
+  <div class="camera-actions"><button type="button" id="camera-restart">Ativar câmera</button><button type="button" id="camera-torch" hidden>Lanterna</button><button type="button" id="camera-photo">Tirar foto / escolher imagem</button></div>
+  <input type="file" id="camera-file" accept="image/*" capture="environment" hidden>
+  <p class="muted camera-instructions">Se a câmera não abrir, permita o acesso nas configurações do navegador ou use uma foto nítida do código.</p>
+</dialog>
+<script src="/static/product_write_off.js?v=715" defer></script><script src="/static/barcode_camera.js?v=715" defer></script>{% endblock %}

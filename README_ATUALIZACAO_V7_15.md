@@ -1,0 +1,12 @@
+# V7.15 — Câmera na baixa de produtos
+
+Base: V7.14. A opção **Câmera** aparece ao lado do campo Código de barras ou descrição, tanto para administrador quanto para colaborador. Abra a câmera traseira, autorize a permissão e centralize um único código. Após duas leituras consecutivas iguais, o código é encaminhado à busca exata existente e a câmera é desligada. Se houver mais de um código no quadro, o sistema oferece seleção. Se a câmera ao vivo não abrir, use **Tirar foto / escolher imagem**. A leitura pelo teclado e a busca por descrição permanecem disponíveis. Nenhuma baixa é gravada automaticamente pela leitura; confira o produto, quantidade e salve.
+
+## Instalação
+Atualize todos os arquivos do ZIP de atualização, mantendo os caminhos. **Dockerfile e requirements.txt devem ser substituídos na raiz do repositório**, pois o leitor usa ZBar (pacote Debian libzbar0t64), pyzbar e Pillow. O Dockerfile usa a imagem Python 3.12 slim-trixie. O Railway deve reconstruir a imagem, não apenas reiniciar o container antigo. Não há alteração de esquema no PostgreSQL. O sistema exige HTTPS para câmera ao vivo (domínio Railway já fornece HTTPS). Em Android, use Chrome; em iPhone, Safari atualizado. Se necessário, abra o endereço diretamente no navegador, não dentro de outro aplicativo. Autorize a câmera nas permissões do navegador.
+
+## Segurança
+A câmera só é ativada mediante ação do operador. Envia quadros JPEG reduzidos ao próprio servidor da aplicação para leitura; não usa serviços externos de reconhecimento e não grava imagens em disco ou banco. O endpoint exige usuário administrador/colaborador autenticado, limita formato, tamanho, resolução, tempo de recebimento e concorrência. A câmera é interrompida ao fechar, selecionar um código, sair da página ou ocultá-la. A leitura preserva zeros à esquerda; a busca não seleciona automaticamente quando há vários produtos com o mesmo código. O custo e setor continuam seguindo as regras anteriores.
+
+## Validação
+Testes locais com imagens sintéticas de códigos EAN-13, EAN-8, UPC-A e Code 128, endpoint real, busca no catálogo, restrição de fornecedor/não autenticado, tamanho e formato de imagens passaram. Python e JavaScript foram verificados sintaticamente. O teste de navegador foi impedido pela política de navegação do ambiente. Não houve teste em aparelhos físicos Android/iOS nem build no Railway; testar após deploy. Financeiro, importadores, categorias, relatórios e fechamento mensal permanecem com o código da V7.14.

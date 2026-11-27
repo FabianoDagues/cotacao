@@ -1,3 +1,2 @@
-Sistema de Cotação V7.14
-Base: V7.13
-Importação PDF de produtos (todas as colunas).
+Sistema de Cotação V7.15 — leitor de código de barras pela câmera
+Base V7.14

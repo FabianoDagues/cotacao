@@ -1182,6 +1182,39 @@ def product_write_off_search(request: Request, q: str = "", modo: str = "descrip
     return {"products": products, "more": more}
 
 
+@app.post("/admin/baixas/ler-camera")
+async def product_camera_read(request: Request, db: Session = Depends(get_db)):
+    require_write_off_user(request, db)
+    from starlette.concurrency import run_in_threadpool
+    from .barcode_camera import MAX_BYTES, CameraImageError, read_codes, slots
+    # Somente quadros JPEG/PNG da página autenticada; limite também no corpo recebido.
+    if request.headers.get('content-type', '').split(';')[0] not in ('image/jpeg', 'image/png'):
+        raise HTTPException(415, 'Formato de imagem não permitido.')
+    if request.headers.get('sec-fetch-site') == 'cross-site':
+        raise HTTPException(403, 'Origem não permitida.')
+    import asyncio
+    raw = bytearray()
+    try:
+        async with asyncio.timeout(10):
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > MAX_BYTES:
+                    raise HTTPException(413, 'Imagem muito grande.')
+                raw.extend(chunk)
+    except TimeoutError as exc:
+        raise HTTPException(408, 'Tempo de recebimento da imagem excedido.') from exc
+    if not slots.acquire(blocking=False):
+        raise HTTPException(429, 'Leitor ocupado. Tente novamente.')
+    try:
+        try:
+            codes = await run_in_threadpool(read_codes, bytes(raw))
+        except CameraImageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        from fastapi.responses import JSONResponse
+        return JSONResponse({'codes': codes}, headers={'Cache-Control': 'no-store'})
+    finally:
+        slots.release()
+
+
 def save_product_barcode(db, form, data):
     if form.get("remember_barcode") != "1": return
     barcode = str(form.get("barcode", "")).strip()
