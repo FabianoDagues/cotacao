@@ -4,11 +4,40 @@
   if(!dialog||!input)return;
   let stream=null,timer=null,controller=null,epoch=0,light=false,starting=false,previous='',consecutive=0;
   const canvas=document.createElement('canvas');
+  // Desbloqueia o áudio no gesto do usuário (especialmente Safari/iOS).
+  let audio=null;
+  function armSound(){
+    try{
+      const Audio=window.AudioContext||window.webkitAudioContext;
+      if(!Audio)return;
+      if(!audio||audio.state==='closed')audio=new Audio();
+      if(audio.state!=='running')audio.resume().catch(()=>{});
+    }catch(e){/* O som é opcional e nunca impede a leitura. */}
+  }
+  function beep(){
+    try{
+      if(!audio||audio.state==='closed')return;
+      const deadline=Date.now()+400;
+      const play=()=>{
+        if(audio.state!=='running'||Date.now()>deadline)return;
+        try{
+          const t=audio.currentTime, tone=audio.createOscillator(), volume=audio.createGain();
+          tone.type='sine';tone.frequency.setValueAtTime(1450,t);
+          volume.gain.setValueAtTime(0,t);volume.gain.linearRampToValueAtTime(.35,t+.008);
+          volume.gain.setValueAtTime(.35,t+.085);volume.gain.linearRampToValueAtTime(0,t+.13);
+          tone.connect(volume);volume.connect(audio.destination);
+          tone.onended=()=>{tone.disconnect();volume.disconnect();};
+          tone.start(t);tone.stop(t+.14);
+        }catch(e){/* Não interfere na identificação do produto. */}
+      };
+      if(audio.state==='running')play();else audio.resume().then(play).catch(()=>{});
+    }catch(e){/* Navegador sem áudio ou áudio bloqueado. */}
+  }
   const say=text=>{status.textContent=text;};
   function stop(){epoch++;clearTimeout(timer);timer=null;if(controller)controller.abort();controller=null;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;preview.hidden=true;torch.hidden=true;light=false;starting=false;previous='';consecutive=0;}
   function close(){stop();if(dialog.open)dialog.close();}
-  function choose(code){close();input.dispatchEvent(new CustomEvent('barcode-read',{detail:code}));}
-  function showChoices(codes){stop();choices.replaceChildren();choices.hidden=false;say('Mais de um código encontrado. Escolha o código correto ou leia novamente.');for(const code of codes){const button=document.createElement('button');button.type='button';button.textContent=code;button.onclick=()=>choose(code);choices.append(button);}}
+  function choose(code){if(!dialog.open)return;beep();close();input.dispatchEvent(new CustomEvent('barcode-read',{detail:code}));}
+  function showChoices(codes){stop();choices.replaceChildren();choices.hidden=false;say('Mais de um código encontrado. Escolha o código correto ou leia novamente.');for(const code of codes){const button=document.createElement('button');button.type='button';button.textContent=code;button.onclick=()=>{armSound();choose(code);};choices.append(button);}}
   function resetChoices(){choices.replaceChildren();choices.hidden=true;}
   function frame(source,w,h,crop){
     // Guia central: preserva a resolução horizontal das barras e exclui a maior parte do fundo.
@@ -53,13 +82,13 @@
       const track=media.getVideoTracks()[0];torch.hidden=!track?.getCapabilities?.().torch;torch.textContent='Lanterna';torch.setAttribute('aria-pressed','false');starting=false;say('Centralize as barras dentro da marcação.');scan(id);
     }catch(err){if(id!==epoch)return;stop();say(err.name==='NotAllowedError'?'Acesso à câmera negado. Libere a permissão no navegador ou use uma foto.':'Não foi possível abrir a câmera. Tente novamente ou use uma foto.');}
   }
-  $('open-camera').onclick=()=>{if(!dialog.open){dialog.showModal();start();}};
+  $('open-camera').onclick=()=>{if(!dialog.open){armSound();dialog.showModal();start();}};
   $('camera-close').onclick=close;
   dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
   dialog.addEventListener('close',stop);
-  $('camera-restart').onclick=start;
+  $('camera-restart').onclick=()=>{armSound();start();};
   torch.onclick=async()=>{const track=stream?.getVideoTracks()[0];if(!track)return;try{await track.applyConstraints({advanced:[{torch:!light}]});light=!light;torch.setAttribute('aria-pressed',String(light));torch.textContent=light?'Desligar lanterna':'Lanterna';}catch(e){say('Lanterna não disponível neste aparelho.');}};
-  $('camera-photo').onclick=()=>{stop();resetChoices();say('Selecione ou fotografe um código de barras.');file.value='';file.click();};
+  $('camera-photo').onclick=()=>{armSound();stop();resetChoices();say('Selecione ou fotografe um código de barras.');file.value='';file.click();};
   file.addEventListener('change',async()=>{
     const photo=file.files?.[0];if(!photo||!dialog.open)return;stop();resetChoices();const id=epoch;say('Analisando foto…');let url;
     try{if(photo.size>25_000_000)throw Error('Foto muito grande. Tire outra foto.');url=URL.createObjectURL(photo);const img=new Image();img.src=url;await img.decode();if(id!==epoch)return;

@@ -1,2 +1,2 @@
-V7.15: leia README_ATUALIZACAO_V7_15.md.
-Atualize também Dockerfile e requirements.txt na raiz. Não recrie o banco.
+V7.16: leia README_ATUALIZACAO_V7_16.md.
+Sobre V7.15, substitua os dois arquivos app/ da atualização. Não recrie o banco.

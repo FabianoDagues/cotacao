@@ -1,2 +1,2 @@
-Sistema de Cotação V7.15 — leitor de código de barras pela câmera
-Base V7.14
+Sistema de Cotação V7.16 — bip na leitura de código de barras pela câmera
+Base V7.15
