@@ -13,6 +13,7 @@
       <a class="button" href="/admin/financeiro/importar">Importar extrato</a>
       <a class="button" href="/admin/financeiro/contas">Contas</a>
       <a class="button" href="/admin/financeiro/grupos">Plano de contas</a>
+      <a class="button" href="/admin/baixas/fechamento">Fechamento de baixas</a>
     </div>
   </div>
 
@@ -59,6 +60,7 @@
   </div>
   <div class="finance-transfer-note muted">Receitas e despesas não incluem transferências internas. As transferências alteram o saldo da conta, mas não alteram o resultado do negócio.</div>
 
+  {% include "closing_finance_rows.html" %}
   <section class="finance-grid-panel" id="lancamentos">
     <div class="finance-grid-head">
       <div>

@@ -14,4 +14,4 @@
   <details><summary>Observação (opcional)</summary><textarea name="notes" maxlength="4000" rows="2">{{values.get('notes') or ''}}</textarea></details>
   <div class="loss-bottom"><div class="loss-total"><small>Custo total da baixa</small><strong id="loss-total">—</strong></div><div class="form-actions"><a class="button" href="/admin/baixas">Voltar</a>{% if row %}<button name="action" value="save" class="primary">Salvar alteração</button>{% else %}<button name="action" value="next" class="primary" {% if not dept or not dept.active %}disabled{% endif %}>Salvar e próximo produto</button>{% endif %}</div></div>
 </form>
-<script src="/static/product_write_off.js?v=712" defer></script>{% endblock %}
+<script src="/static/product_write_off.js?v=714" defer></script>{% endblock %}

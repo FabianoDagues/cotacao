@@ -27,6 +27,8 @@ from .db import Base, engine, get_db, SessionLocal
 from .models import User, PasswordResetToken, Quote, QuoteSupplier, QuoteItem, QuoteResponse, PurchaseOrder, PurchaseOrderItem, ProductWriteOff, ProductBarcode, Department, CatalogProduct
 from .security import hash_password, verify_password
 from .finance import router as finance_router, seed_finance_defaults
+from .closing import router as closing_router, start_worker, stop_worker, group_options
+from .catalog_pdf import import_product_pdf
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Sistema de Cotação")
@@ -34,6 +36,7 @@ app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "troque
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.include_router(finance_router)
+app.include_router(closing_router)
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Sao_Paulo")
 
 def now_local() -> datetime:
@@ -94,7 +97,8 @@ def ensure_runtime_schema():
 
     # Colunas novas são opcionais para preservar registros anteriores.
     additions = {"users": {"department_id": "INTEGER REFERENCES departments(id)"},
-                 "product_write_offs": {"department_id": "INTEGER REFERENCES departments(id)", "department_name": "VARCHAR(120)", "operator_name": "VARCHAR(120)", "catalog_barcode": "VARCHAR(80)"}}
+                 "catalog_products": {"closing_group_id": "INTEGER REFERENCES cash_groups(id)", "source_real_cost": "NUMERIC(14,4)", "sale_price": "NUMERIC(14,4)", "icms": "VARCHAR(40)", "traditional_margin": "NUMERIC(14,4)", "source_status": "VARCHAR(20)", "source_barcode": "VARCHAR(80)", "ncm": "VARCHAR(20)"},
+                 "product_write_offs": {"closing_group_id": "INTEGER REFERENCES cash_groups(id)", "department_id": "INTEGER REFERENCES departments(id)", "department_name": "VARCHAR(120)", "operator_name": "VARCHAR(120)", "catalog_barcode": "VARCHAR(80)"}}
     with engine.begin() as conn:
         for table, fields in additions.items():
             if table in tables:
@@ -153,6 +157,12 @@ def startup():
     backfill_submission_status()
     seed_admin()
     seed_finance_defaults()
+    start_worker()
+
+
+@app.on_event("shutdown")
+def shutdown_closing():
+    stop_worker()
 
 
 @app.get("/healthz")
@@ -1104,16 +1114,14 @@ def legacy_product_lookup(db, term, mode):
 
 def product_lookup(db, term, mode):
     exact = mode == "code"
-    if exact:
-        p = db.get(CatalogProduct, term)
-        if p:
-            return [catalog_dict(p)], False
+    # Zero é um marcador de ausência de código de barras, não um código pesquisável.
     tokens = normalize_product_search(term).split()
     results = []
     stmt = select(CatalogProduct).order_by(CatalogProduct.description)
-    if exact: stmt = stmt.where((CatalogProduct.code == term) | (CatalogProduct.barcode == term))
+    if exact:
+        stmt = stmt.where((CatalogProduct.code == term) | ((CatalogProduct.barcode == term) & CatalogProduct.source_barcode.is_(None)) | ((CatalogProduct.source_barcode == term) if term.strip('0') else literal(False)))
     for p in db.scalars(stmt.execution_options(yield_per=200)):
-        if exact or all(t in normalize_product_search(f"{p.description} {p.code} {p.barcode}") for t in tokens):
+        if exact or all(t in normalize_product_search(f"{p.description} {p.code} {p.source_barcode if p.source_barcode is not None else p.barcode}") for t in tokens):
             results.append(catalog_dict(p))
             if len(results) > 30: return results[:30], True
     old, more = legacy_product_lookup(db, term, mode)
@@ -1126,7 +1134,7 @@ def product_lookup(db, term, mode):
 
 
 def catalog_dict(p):
-    return dict(code=p.code or p.barcode, description=p.description, unit=p.unit, barcode=p.barcode, unit_cost=str(p.unit_cost), catalog_barcode=p.barcode)
+    return dict(code=p.code or p.barcode, description=p.description, unit=p.unit, barcode=p.source_barcode if p.source_barcode is not None else p.barcode, unit_cost=str(p.unit_cost), catalog_barcode=p.barcode, source_status=p.source_status)
 
 
 def require_write_off_user(request, db):
@@ -1157,6 +1165,8 @@ def apply_catalog(db, form, data, row=None):
             data.update(code=p.code or p.barcode, description=p.description, unit=p.unit, unit_cost=p.unit_cost)
         else:
             data.update(code=row.code, description=row.description, unit=row.unit, unit_cost=row.unit_cost)
+    if not row or row.catalog_barcode != (barcode or None):
+        data["closing_group_id"] = p.closing_group_id if barcode else None
     data['catalog_barcode'] = barcode or None
 
 
@@ -1395,6 +1405,7 @@ CATALOG_HEADERS={
     'cost':{'precocusto','precodecusto','custounitario','custo','valorcusto','valorunitariocusto','custoproduto','custoreposicao','custoaquisicao'},
     'code':{'codigo','codigointerno','codproduto','codigoproduto','codigodoproduto','sku','cod'},
     'unit':{'unidade','un','und','unid','unidademedida','unidadedemedida'},
+    'closing_category':{'categoriadebaixa','categoriabaixa','subgrupofinanceiro'},
 }
 
 
@@ -1429,8 +1440,14 @@ def read_catalog_rows(raw, filename):
 
 
 def import_catalog(db, raw, filename, update_cost=False):
+    if filename.lower().endswith('.pdf'):
+        return import_product_pdf(db, raw, update_cost)
     # Uma planilha de produtos por arquivo; rejeitar ambiguidades em vez de adivinhar colunas.
-    data=[]; errors=[]; found=False
+    data=[]; errors=[]; found=False; excluded=0
+    category_names={}
+    for g,parent in group_options(db):
+        for name in (g.name, parent.name+" / "+g.name, parent.name+" › "+g.name):
+            category_names.setdefault(normalize_product_search(name),set()).add(g.id)
     for sheet, rows in read_catalog_rows(raw,filename):
         cols=None
         for i,cells in rows:
@@ -1448,11 +1465,15 @@ def import_catalog(db, raw, filename, update_cost=False):
             try:
                 barcode=cell_code(*get('barcode')); code=cell_code(*get('code'))
                 desc=str(get('description')[0] or '').strip(); unit=str(get('unit')[0] or 'UN').strip().upper()
+                if desc.casefold().startswith('zz'): excluded+=1;continue
                 raw_cost=get('cost')[0]
                 if raw_cost is None or str(raw_cost).strip()=='': raise ValueError('Custo ausente.')
                 cost=parse_decimal(raw_cost)
                 if not barcode or len(barcode)>80 or any(c.isspace() for c in barcode) or not desc or len(desc)>255 or len(code)>80 or len(unit)>40 or not cost.is_finite() or cost<0 or cost>=Decimal('10000000000') or cost!=cost.quantize(Decimal('0.0001')): raise ValueError('Código de barras, descrição ou custo inválido.')
-                data.append((barcode,code,desc,unit,cost,i))
+                category=str(get('closing_category')[0] or '').strip()
+                ids=category_names.get(normalize_product_search(category),set())
+                if category and len(ids)!=1: raise ValueError("Categoria de baixa não encontrada ou ambígua: "+category[:160])
+                data.append((barcode,code,desc,unit,cost,i,next(iter(ids)) if ids else None))
                 if len(data)>100000: raise ValueError('Limite de 100 mil linhas por arquivo.')
             except (ValueError,InvalidOperation,OverflowError) as e:
                 errors.append(f'{sheet}, linha {i}: {e}')
@@ -1460,7 +1481,7 @@ def import_catalog(db, raw, filename, update_cost=False):
         if errors: break
     if not found: raise ValueError('Cabeçalhos não encontrados: Código de barras, Descrição, Preço de custo. Use o modelo.')
     if errors: raise ValueError('Nenhum produto gravado. '+' | '.join(errors))
-    if not data: raise ValueError('Planilha sem produtos.')
+    if not data and not excluded: raise ValueError('Planilha sem produtos.')
     existing={p.barcode:p for p in db.scalars(select(CatalogProduct))}; by_code={}
     for p in existing.values():
         if p.code: by_code.setdefault(p.code,set()).add(p.barcode)
@@ -1472,12 +1493,21 @@ def import_catalog(db, raw, filename, update_cost=False):
     for c,d,u in db.execute(select(ProductWriteOff.code,ProductWriteOff.description,ProductWriteOff.unit).distinct()):
         if c: legacy.setdefault(c,set()).add((normalize_product_search(d),u.upper()))
     added=skipped=updated=linked=0; seen={}
-    for barcode,code,desc,unit,cost,i in data:
+    categorized=0
+    pdf_bars={}
+    for p in existing.values():
+        if p.source_barcode and p.source_barcode.strip('0'): pdf_bars.setdefault(p.source_barcode,[]).append(p)
+    for barcode,code,desc,unit,cost,i,category_id in data:
+        pdf_matches=pdf_bars.get(barcode,[])
+        if pdf_matches:
+            if code: pdf_matches=[p for p in pdf_matches if p.code==code]
+            if len(pdf_matches)!=1: raise ValueError(f'Linha {i}: código de barras de cadastro PDF ambíguo. Informe o código interno correto.')
+            barcode=pdf_matches[0].barcode
         alias=aliases.get(barcode)
         if alias and code and alias.code and code!=alias.code: raise ValueError(f'Linha {i}: código de barras já vinculado a outro código interno. Nenhum produto gravado.')
         if alias and not code: code=alias.code
         if not code and barcode in legacy: code=barcode
-        signature=(code,normalize_product_search(desc),unit,cost)
+        signature=(code,normalize_product_search(desc),unit,cost,category_id)
         if barcode in seen:
             if seen[barcode]!=signature: raise ValueError(f'Linha {i}: código de barras repetido com dados diferentes. Nenhum produto gravado.')
             skipped+=1;continue
@@ -1485,6 +1515,7 @@ def import_catalog(db, raw, filename, update_cost=False):
         p=existing.get(barcode)
         if p:
             if code and p.code and code!=p.code: raise ValueError(f'Linha {i}: código interno diverge do cadastro. Nenhum produto gravado.')
+            if category_id and not p.closing_group_id: p.closing_group_id=category_id;categorized+=1
             if update_cost and p.unit_cost!=cost: p.unit_cost=cost;updated+=1
             else: skipped+=1
             continue
@@ -1494,18 +1525,18 @@ def import_catalog(db, raw, filename, update_cost=False):
             raise ValueError(f'Linha {i}: código histórico com descrição/unidade diferente. Confira antes de importar.')
         if alias or historical: linked+=1
         else: added+=1
-        p=CatalogProduct(barcode=barcode,code=code,description=desc,unit=unit,unit_cost=cost); db.add(p);existing[barcode]=p
+        p=CatalogProduct(barcode=barcode,code=code,description=desc,unit=unit,unit_cost=cost,closing_group_id=category_id); db.add(p);existing[barcode]=p
         if code: by_code.setdefault(code,set()).add(barcode)
     db.commit()
-    return dict(added=added,linked=linked,skipped=skipped,updated=updated)
+    return dict(added=added,linked=linked,skipped=skipped,updated=updated,categorized=categorized,excluded=excluded)
 
 
 @app.get('/admin/produtos',response_class=HTMLResponse)
 def catalog_page(request:Request,db:Session=Depends(get_db)):
     user=require_role(request,db,'admin');q=request.query_params.get('q','').strip()[:255]
     stmt=select(CatalogProduct).order_by(CatalogProduct.description)
-    if q: stmt=stmt.where(CatalogProduct.description.icontains(q,autoescape=True)|CatalogProduct.barcode.icontains(q,autoescape=True)|CatalogProduct.code.icontains(q,autoescape=True))
-    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':q,'products':db.scalars(stmt.limit(200)).all(),'result':None,'error':None})
+    if q: stmt=stmt.where(CatalogProduct.description.icontains(q,autoescape=True)|CatalogProduct.barcode.icontains(q,autoescape=True)|CatalogProduct.source_barcode.icontains(q,autoescape=True)|CatalogProduct.code.icontains(q,autoescape=True))
+    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':q,'products':db.scalars(stmt.limit(200)).all(),'closing_options':group_options(db),'result':None,'error':None})
 
 
 @app.post('/admin/produtos/importar',response_class=HTMLResponse)
@@ -1516,16 +1547,16 @@ async def catalog_import(request:Request,file:UploadFile=File(...),update_cost:s
         if len(raw)>25*1024*1024: raise ValueError('Arquivo acima de 25 MB.')
         result=import_catalog(db,raw,file.filename or '',update_cost=='1')
     except Exception as exc:
-        db.rollback();error=str(exc) if isinstance(exc,ValueError) else 'Não foi possível ler ou gravar a planilha. Confira o formato e os dados.'
+        db.rollback();error=str(exc) if isinstance(exc,ValueError) else 'Não foi possível ler ou gravar o arquivo. Confira o formato e os dados.'
     finally: await file.close()
-    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':'','products':db.scalars(select(CatalogProduct).order_by(CatalogProduct.description).limit(200)).all(),'result':result,'error':error},status_code=400 if error else 200)
+    return templates.TemplateResponse(request,'catalog.html',{'user':user,'q':'','products':db.scalars(select(CatalogProduct).order_by(CatalogProduct.description).limit(200)).all(),'closing_options':group_options(db),'result':result,'error':error},status_code=400 if error else 200)
 
 
 @app.get('/admin/produtos/modelo')
 def catalog_model(request:Request,db:Session=Depends(get_db)):
     require_role(request,db,'admin')
-    wb=Workbook();ws=wb.active;ws.title='Produtos';ws.append(['Código de barras','Descrição','Preço de custo','Código interno','Unidade'])
+    wb=Workbook();ws=wb.active;ws.title='Produtos';ws.append(['Código de barras','Descrição','Preço de custo','Código interno','Unidade','Categoria de baixa'])
     for col in ('A','D'): ws.column_dimensions[col].number_format='@'
-    for col,width in [('A',23),('B',45),('C',20),('D',20),('E',15)]: ws.column_dimensions[col].width=width
+    for col,width in [('A',23),('B',45),('C',20),('D',20),('E',15),('F',40)]: ws.column_dimensions[col].width=width
     stream=io.BytesIO();wb.save(stream);stream.seek(0)
     return StreamingResponse(stream,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename=modelo_cadastro_produtos.xlsx'})

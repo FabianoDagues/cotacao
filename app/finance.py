@@ -22,6 +22,7 @@ from openpyxl import load_workbook
 
 from .db import get_db, SessionLocal
 from .bank_pdf import read_pdf
+from .closing import finance_lines, finance_pending
 from .models import (
     User,
     CashGroup,
@@ -186,6 +187,7 @@ def seed_finance_defaults():
         ("Telefone", "expense", "Despesas operacionais"),
         ("Internet", "expense", "Despesas operacionais"),
         ("Limpeza", "expense", "Despesas operacionais"),
+        ("Material de limpeza", "expense", "Despesas operacionais"),
         ("Segurança", "expense", "Despesas operacionais"),
         ("Serviços", "expense", "Despesas operacionais"),
         ("Despesas de marketing", "expense", None),
@@ -493,6 +495,8 @@ def cashflow_page(
         "period_end_balance": opening + period_movement,
         "daily_rows": daily_rows,
         "group_rows": group_rows,
+        "closing_lines": finance_lines(db,start,end,account_id,grupo,subgrupo,tipo),
+        "closing_pending": finance_pending(db,start,end,account_id,tipo),
         "group_map": group_map,
         "account_map": account_map,
         "start": start,
@@ -553,6 +557,8 @@ def cashflow_print(
         "opening": opening, "period_end_balance": opening+period_movement,
         "bank_total": bank_total, "cash_total": cash_total, "consolidated": bank_total+cash_total,
         "group_map": group_map, "account_map": account_map, "daily_rows": daily_rows, "group_rows": group_rows,
+        "closing_lines": finance_lines(db,start,end,account_id,grupo,subgrupo,tipo),
+        "closing_pending": finance_pending(db,start,end,account_id,tipo),
     })
 
 

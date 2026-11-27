@@ -206,6 +206,7 @@ class ProductWriteOff(Base):
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
     department_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     operator_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    closing_group_id: Mapped[int | None] = mapped_column(ForeignKey("cash_groups.id"), nullable=True)
     catalog_barcode: Mapped[str | None] = mapped_column(String(80), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -222,8 +223,43 @@ class ProductBarcode(Base):
 
 class CatalogProduct(Base):
     __tablename__ = "catalog_products"
+    closing_group_id: Mapped[int | None] = mapped_column(ForeignKey("cash_groups.id"), nullable=True)
     barcode: Mapped[str] = mapped_column(String(80), primary_key=True)
     code: Mapped[str] = mapped_column(String(80), default="", index=True)
     description: Mapped[str] = mapped_column(String(255))
     unit: Mapped[str] = mapped_column(String(40), default="UN")
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4))
+    source_real_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    sale_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    icms: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    traditional_margin: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    source_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_barcode: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ncm: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class WriteOffClosing(Base):
+    __tablename__ = 'write_off_closings'
+    period: Mapped[date] = mapped_column(Date, primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), default='pending')
+    source: Mapped[str] = mapped_column(String(20), default='automatic')
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    signature: Mapped[str] = mapped_column(String(64), default='')
+    pending_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class WriteOffClosingLine(Base):
+    __tablename__ = 'write_off_closing_lines'
+    period: Mapped[date] = mapped_column(ForeignKey('write_off_closings.period', ondelete='CASCADE'), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey('cash_groups.id'), primary_key=True)
+    parent_id: Mapped[int] = mapped_column(Integer)
+    group_name: Mapped[str] = mapped_column(String(160))
+    parent_name: Mapped[str] = mapped_column(String(160))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    item_count: Mapped[int] = mapped_column(Integer)
+
+
+class WriteOffClosingConfig(Base):
+    __tablename__ = 'write_off_closing_config'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    start_period: Mapped[date] = mapped_column(Date)

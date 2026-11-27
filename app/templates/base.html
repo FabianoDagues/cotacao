@@ -22,6 +22,7 @@
       <div class="sidebar-section">Produtos</div>
       {{ item('/admin/baixas','Baixa de produtos','↓',path.startswith('/admin/baixas')) }}
       {{ item('/admin/baixas?relatorio=1','Relatório de baixas','▤',path == '/admin/baixas' and request.query_params.get('relatorio') == '1') }}
+      {{ item('/admin/baixas/fechamento','Fechamento de baixas','▤',path == '/admin/baixas/fechamento') }}
       {{ item('/admin/produtos','Cadastro de produtos','▦',path.startswith('/admin/produtos')) }}
       <div class="sidebar-section">Cadastros</div>
       {{ item('/admin/setores','Setores','▣',path == '/admin/setores') }}
